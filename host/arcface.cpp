@@ -120,6 +120,7 @@ struct KernArgs {
 
 struct Profiler {
     bool enabled = false;
+    hipStream_t stream = nullptr;
     std::map<std::string, double> stage_us;
     std::map<std::string, int> stage_calls;
 };
@@ -127,11 +128,11 @@ struct Profiler {
 struct Stage {
     Profiler &p; std::string name; std::chrono::steady_clock::time_point start;
     Stage(Profiler &prof, const char *n) : p(prof), name(n) {
-        if (p.enabled) { HIP_CHECK(hipDeviceSynchronize()); start = std::chrono::steady_clock::now(); }
+        if (p.enabled) { HIP_CHECK(hipStreamSynchronize(p.stream)); start = std::chrono::steady_clock::now(); }
     }
     ~Stage() {
         if (!p.enabled) return;
-        (void)hipDeviceSynchronize();   // a destructor must not throw
+        (void)hipStreamSynchronize(p.stream);   // a destructor must not throw
         auto us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
         p.stage_us[name] += us; p.stage_calls[name] += 1;
     }
@@ -145,6 +146,8 @@ public:
             if (max_batch < 1 || max_batch > MAX_BATCH)
                 throw std::invalid_argument("max_batch must be 1.." + std::to_string(MAX_BATCH));
             HIP_CHECK(hipInit(0));
+            HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
+            profiler.stream = stream_;
 
             auto spans16 = read_manifest(weights_dir + "/manifest_f16.txt");
             auto spans32 = read_manifest(weights_dir + "/manifest.txt");
@@ -210,7 +213,7 @@ public:
             throw std::invalid_argument("input has " + std::to_string(bytes) + " bytes; batch " +
                                         std::to_string(batch) + " requires exactly " + std::to_string(want) +
                                         " (" + std::to_string(SIZE) + "x" + std::to_string(SIZE) + " BGR uint8 per image)");
-        HIP_CHECK(hipMemcpyHtoD((hipDeviceptr_t)input_, (void *)input, want));
+        HIP_CHECK(hipMemcpyAsync(input_, input, want, hipMemcpyHostToDevice, stream_));
     }
 
     void forward(int batch) {
@@ -247,16 +250,16 @@ public:
             void *config[] = {HIP_LAUNCH_PARAM_BUFFER_POINTER, args.bytes,
                               HIP_LAUNCH_PARAM_BUFFER_SIZE, &args.size, HIP_LAUNCH_PARAM_END};
             HIP_CHECK(hipModuleLaunchKernel(kernels_[l.kernel].function, gx, gy, gz, THREADS, 1, 1, 0,
-                                            nullptr, nullptr, config));
+                                            stream_, nullptr, config));
         }
     }
 
-    void synchronize() { HIP_CHECK(hipDeviceSynchronize()); }
+    void synchronize() { HIP_CHECK(hipStreamSynchronize(stream_)); }
 
     void download(int batch) {
         Stage stage(profiler, "download embeddings");
-        HIP_CHECK(hipMemcpyDtoH(output_host_, (hipDeviceptr_t)buffers_[ARCFACE_OUTPUT_BUFFER],
-                                output_elements(batch) * sizeof(float)));
+        HIP_CHECK(hipMemcpyAsync(output_host_, buffers_[ARCFACE_OUTPUT_BUFFER],
+                                 output_elements(batch) * sizeof(float), hipMemcpyDeviceToHost, stream_));
     }
 
     // One call of the ABI: validate everything before touching the GPU.
@@ -271,8 +274,8 @@ public:
                                         std::to_string(ARCFACE_EMBEDDING) + ")");
         upload(input, bytes, batch);
         forward(batch);
-        synchronize();
         download(batch);
+        synchronize();
         memcpy(embeddings, output_host_, output_elements(batch) * sizeof(float));
     }
 
@@ -294,6 +297,7 @@ private:
         // Construction can fail after any individual allocation or module load.
         // Clear every handle as it is released so this is also safe for normal
         // destruction and for partially initialized vectors.
+        if (stream_) (void)hipStreamSynchronize(stream_);
         for (auto *&b : buffers_) {
             if (b) (void)hipFree(b);
             b = nullptr;
@@ -309,12 +313,16 @@ private:
             k.module = nullptr;
             k.function = nullptr;
         }
+        if (stream_) (void)hipStreamDestroy(stream_);
+        stream_ = nullptr;
+        profiler.stream = nullptr;
     }
 
     int max_batch_;
     std::mutex mutex_;
     std::vector<Kernel> kernels_;
     std::vector<void *> buffers_;
+    hipStream_t stream_ = nullptr;
     void *input_ = nullptr, *weights16_ = nullptr, *weights32_ = nullptr;
     float *output_host_ = nullptr;
     std::map<int, size_t> weight_off_, bias_off_, slope_off_;

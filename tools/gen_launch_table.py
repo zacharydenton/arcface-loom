@@ -45,6 +45,12 @@ KINDS = {"convert": 0, "conv3x3": 1, "head_matmul": 2, "head_reduce": 3}
 VARIANTS = {"": 0, "plain": 0, "prelu": 1, "bnprelu": 2, "add": 3}
 
 
+def require(condition: bool, detail) -> None:
+    """Keep launch and buffer-safety invariants active under ``python -O``."""
+    if not condition:
+        raise RuntimeError(f"cannot generate ArcFace launch table: {detail}")
+
+
 @dataclass
 class Launch:
     kind: str                 # convert, conv3x3, head_matmul, head_reduce
@@ -138,9 +144,9 @@ def build_schedule(graph: G.Graph):
                 aux.append("slope")
             _, cin, h, w = graph.shapes[src]
             cs = shapes[resolve(src)][1]
-            assert cs == storage_stride(cin), (op.name, cs, storage_stride(cin))
+            require(cs == storage_stride(cin), (op.name, cs, storage_stride(cin)))
             if op.stride == 2:
-                assert h % 2 == 0 and w % 2 == 0, (op.name, h, w)
+                require(h % 2 == 0 and w % 2 == 0, (op.name, h, w))
             cin_pad = align(cin, CIN_ALIGN)
             k_size = align(9 * cin_pad, K_ALIGN)
             n_size = align(op.cout, COUT_ALIGN)
@@ -159,7 +165,7 @@ def build_schedule(graph: G.Graph):
             src = bn_in.inputs[0]                    # the last residual tensor, NHWC [B*49][512]
             rows, cols, _ = shapes[resolve(src)]
             k_size, n_size = rows * cols, align(fc.cout, COUT_ALIGN)
-            assert k_size == fc.weight.shape[1] and k_size % 128 == 0, (k_size, fc.weight.shape)
+            require(k_size == fc.weight.shape[1] and k_size % 128 == 0, (k_size, fc.weight.shape))
             splits = head_splits(k_size)
             launches.append(Launch("head_matmul", "", "fc", src, "partials", stage="head matmul",
                                    k_size=k_size, cout=fc.cout, n_size=n_size, ho=1, wo=1, splits=splits))
@@ -217,7 +223,7 @@ def build_schedule(graph: G.Graph):
         l.dst_buf = pick
         l.src_buf = owner[l.src] if l.src in owner else -1     # -1: the raw input
         l.extra_buf = owner[l.extra] if l.extra else -1
-        assert l.dst_buf != l.src_buf and l.dst_buf != l.extra_buf, ("in-place hazard", l.name)
+        require(l.dst_buf != l.src_buf and l.dst_buf != l.extra_buf, ("in-place hazard", l.name))
         for t in (l.src, l.extra):
             if t and t in owner and last_use.get(t) == i and t != "embedding":
                 free.append(owner[t])

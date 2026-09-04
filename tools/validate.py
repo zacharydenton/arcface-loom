@@ -24,6 +24,8 @@ import test_align as TA
 from test_reference import ort_session, cosine
 
 ROOT = Path(__file__).resolve().parent.parent
+MIN_COSINE = 0.99995
+MAX_SIMILARITY_DELTA = 1e-3
 
 
 def run_loom(crops: np.ndarray, extra_args: list[str] = ()) -> np.ndarray:
@@ -58,18 +60,18 @@ def main() -> int:
     want = sess.run(None, {sess.get_inputs()[0].name: R.blob_from_bgr_f64(crops).astype(np.float32)})[0]
     for i in range(len(crops)):
         c = cosine(got[i], want[i]); err = np.abs(got[i] - want[i]).max()
-        good = c > 0.999
+        good = c > MIN_COSINE
         ok &= good
         print(f"  {'PASS' if good else 'FAIL'} face {i} vs onnxruntime: cosine={c:.7f} max_abs={err:.3e}")
 
     fixture = np.array([f["embedding"] for f in fx["faces"]], np.float32)
     cos = [cosine(g, w) for g, w in zip(got, fixture)]
-    good = min(cos) > 0.999
+    good = min(cos) > MIN_COSINE
     ok &= good
     print(f"  {'PASS' if good else 'FAIL'} vs insightface's own embeddings: cosine min={min(cos):.7f}")
     sim_got, sim_want = normed(got) @ normed(got).T, normed(fixture) @ normed(fixture).T
     err = np.abs(sim_got - sim_want).max()
-    good = err < 1e-2
+    good = err < MAX_SIMILARITY_DELTA
     ok &= good
     print(f"  {'PASS' if good else 'FAIL'} 6x6 similarity matrix vs insightface: max |delta| = {err:.4f}")
 

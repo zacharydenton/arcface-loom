@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tools"))
 from arcface_loom import ArcFaceError, ArcFaceLoom, compute_sim   # noqa: E402
 import test_align as TA                                            # noqa: E402
-from validate import run_loom                                      # noqa: E402
+from validate import MIN_COSINE, run_loom                          # noqa: E402
 
 
 def require_raises(kind, phrase: str, call) -> None:
@@ -62,7 +62,7 @@ def main() -> int:
         check("get_feat on one crop returns (1, 512)", model.get_feat(crops[0]).shape == (1, 512)
               and np.array_equal(model.get_feat(crops[0])[0], feats[0]))
         cos = [compute_sim(model.get(img, k), f) for k, f in zip(kps, fixture)]
-        check(f"get(img, kps) vs insightface's embeddings: cosine min={min(cos):.6f}", min(cos) > 0.999)
+        check(f"get(img, kps) vs insightface's embeddings: cosine min={min(cos):.6f}", min(cos) > MIN_COSINE)
 
         class Face:
             def __init__(self, k): self.kps = k
@@ -98,12 +98,39 @@ def main() -> int:
 
         with ArcFaceLoom(max_batch=1) as other:
             check("a second session agrees", np.array_equal(other.get_feat(crops), feats))
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                left = pool.submit(model.get_feat, crops[:2])
+                right = pool.submit(other.get_feat, crops[2:4])
+                check("independent session streams can run concurrently",
+                      np.array_equal(left.result(), feats[:2]) and np.array_equal(right.result(), feats[2:4]))
         check("the first session survives the second's close", np.array_equal(model.get_feat(crops), feats))
 
     assert model.closed
     model.close()
     require_raises(ArcFaceError, "closed", lambda: model.get_feat(crops))
-    check("closed sessions refuse calls", True)
+    require_raises(ArcFaceError, "closed", lambda: model.embed(img, np.empty((0, 5, 2), np.float32)))
+    check("closed sessions refuse calls, including empty embed", True)
+
+    # A fork-inherited object must reject the call before entering its copied
+    # lock. Such a lock can be permanently held by a parent thread that does not
+    # exist in the child; this sentinel makes the ordering deterministic without
+    # forking after HIP has initialized.
+    class MustNotLock:
+        def __enter__(self):
+            raise AssertionError("fork guard tried to acquire the inherited lock")
+        def __exit__(self, *args):
+            return False
+
+    inherited = ArcFaceLoom.__new__(ArcFaceLoom)
+    inherited.size, inherited.embedding_size, inherited.max_batch = 112, 512, 1
+    inherited._input = np.empty((1, 112, 112, 3), np.uint8)
+    inherited._output = np.empty((1, 512), np.float32)
+    inherited._handle = ctypes.c_void_p(1)
+    inherited._pid = -1
+    inherited._lock = MustNotLock()
+    require_raises(ArcFaceError, "fork", lambda: inherited.get_feat(crops[:1]))
+    inherited.close()
+    check("fork-inherited sessions reject without acquiring a possibly orphaned lock", inherited.closed)
     return 0 if ok else 1
 
 

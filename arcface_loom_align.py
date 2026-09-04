@@ -28,6 +28,12 @@ def umeyama(src: np.ndarray, dst: np.ndarray, estimate_scale: bool = True) -> np
     Returns the (dim+1)x(dim+1) homogeneous matrix."""
     src = np.asarray(src)
     dst = np.asarray(dst)
+    if src.ndim != 2 or dst.shape != src.shape:
+        raise ValueError(f"src and dst must have the same (points, dimensions) shape, got {src.shape} and {dst.shape}")
+    if src.shape[0] == 0 or src.shape[1] == 0:
+        raise ValueError("src and dst must contain at least one point and one dimension")
+    if not np.isfinite(src).all() or not np.isfinite(dst).all():
+        raise ValueError("src and dst coordinates must be finite")
     num, dim = src.shape
     src_mean = src.mean(axis=0)
     dst_mean = dst.mean(axis=0)
@@ -63,8 +69,13 @@ def estimate_norm(kps: np.ndarray, image_size: int = INPUT_SIZE) -> np.ndarray:
     """insightface's estimate_norm: the 2x3 affine taking the (5, 2) landmarks to
     the template at image_size (a multiple of 112, or of 128 with its x offset)."""
     kps = np.asarray(kps, dtype=np.float32)
-    assert kps.shape == (5, 2), kps.shape
-    assert image_size % 112 == 0 or image_size % 128 == 0, image_size
+    if kps.shape != (5, 2):
+        raise ValueError(f"expected (5, 2) landmarks, got {kps.shape}")
+    if not isinstance(image_size, (int, np.integer)) or isinstance(image_size, (bool, np.bool_)):
+        raise TypeError(f"image_size must be an integer, got {type(image_size).__name__}")
+    image_size = int(image_size)
+    if image_size <= 0 or (image_size % 112 != 0 and image_size % 128 != 0):
+        raise ValueError(f"image_size must be a positive multiple of 112 or 128, got {image_size}")
     if image_size % 112 == 0:
         ratio, diff_x = float(image_size) / 112.0, 0.0
     else:
@@ -72,7 +83,10 @@ def estimate_norm(kps: np.ndarray, image_size: int = INPUT_SIZE) -> np.ndarray:
         diff_x = 8.0 * ratio
     dst = ARCFACE_DST * ratio
     dst[:, 0] += diff_x
-    return umeyama(kps, dst, True)[0:2, :]
+    transform = umeyama(kps, dst, True)[0:2, :]
+    if not np.isfinite(transform).all():
+        raise ValueError("landmarks do not define a finite similarity transform")
+    return transform
 
 
 def norm_crop(image_bgr: np.ndarray, kps: np.ndarray, image_size: int = INPUT_SIZE) -> np.ndarray:

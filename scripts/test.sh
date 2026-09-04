@@ -36,6 +36,7 @@ step "launch table matches the graph" bash -c '
   cp host/graph_table.inc "$tmpdir/table.inc" && cp scripts/kernels.generated "$tmpdir/kernels.generated" &&
   python3 tools/gen_launch_table.py >/dev/null &&
   cmp -s host/graph_table.inc "$tmpdir/table.inc" && cmp -s scripts/kernels.generated "$tmpdir/kernels.generated"'
+step "safety checks survive python -O" python3 -O tools/test_invariants.py
 step "export folds are exact (float64)" env -u LD_LIBRARY_PATH python3 tools/test_export_fold.py
 step "export weights" python3 tools/export_weights.py
 step "build kernels" ./scripts/build_kernels.sh

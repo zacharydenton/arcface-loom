@@ -63,6 +63,21 @@ def main() -> int:
     good = err < 1e-6
     ok &= good
     print(f"  {'PASS' if good else 'FAIL'} blob vs cv2.dnn.blobFromImages: max_abs={err:.1e}")
+
+    for label, call in (
+        ("bad landmark shape", lambda: A.estimate_norm(np.zeros((4, 2), np.float32))),
+        ("non-finite landmarks", lambda: A.estimate_norm(np.full((5, 2), np.nan, np.float32))),
+        ("unsupported image size", lambda: A.estimate_norm(np.zeros((5, 2), np.float32), 100)),
+        ("non-integer image size", lambda: A.estimate_norm(np.zeros((5, 2), np.float32), 112.0)),
+        ("degenerate landmarks", lambda: A.estimate_norm(np.zeros((5, 2), np.float32))),
+    ):
+        try:
+            call()
+        except (TypeError, ValueError):
+            print(f"  PASS rejects {label}")
+        else:
+            print(f"  FAIL accepts {label}")
+            ok = False
     return 0 if ok else 1
 
 

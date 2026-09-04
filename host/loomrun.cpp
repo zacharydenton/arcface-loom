@@ -4,7 +4,7 @@
 // their natural alignment, then one 8-byte device pointer per `buffer` operand.
 // Arguments are given on the command line in that same order.
 //
-//   loomrun --hsaco k.hsaco --kernel name --grid 201 --block 256 \
+//   loomrun --hsaco k.hsaco --kernel name --grid 201,1,1 --block 256,1,1 \
 //           --i32 201 --in x.bin --in gamma.bin --in beta.bin --out y.bin:308736
 //
 // Built against real ROCm HIP on purpose: it keeps "is the kernel correct"

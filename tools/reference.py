@@ -18,7 +18,8 @@ def conv2d(x: np.ndarray, w: np.ndarray, b: np.ndarray, stride: int, pad: int) -
     """x [N,C,H,W] f64, w [Cout,Cin,k,k], b [Cout] -> [N,Cout,Ho,Wo] f64."""
     n, c, h, wd = x.shape
     cout, cin, k, _ = w.shape
-    assert cin == c
+    if cin != c:
+        raise ValueError(f"input has {c} channels but convolution weights expect {cin}")
     xp = np.pad(x, ((0, 0), (0, 0), (pad, pad), (pad, pad)))
     ho, wo = (h + 2 * pad - k) // stride + 1, (wd + 2 * pad - k) // stride + 1
     # im2col: [N, Ho, Wo, C, k, k] via stride tricks, then one matmul per image

@@ -24,7 +24,13 @@ EMBEDDING = 512
 
 
 def model_path() -> Path:
-    return Path(os.environ.get("ARCFACE_ONNX", DEFAULT_MODEL))
+    return Path(os.environ.get("ARCFACE_ONNX", DEFAULT_MODEL)).expanduser()
+
+
+def require(condition: bool, detail) -> None:
+    """Reject an incompatible graph even when Python assertions are disabled."""
+    if not condition:
+        raise ValueError(f"unsupported ArcFace ONNX graph: {detail}")
 
 
 @dataclass
@@ -99,10 +105,14 @@ def load(size: int = INPUT_SIZE, path: Path | None = None) -> Graph:
         if t == "Conv":
             w, b = init[n.input[1]], init[n.input[2]]
             s, p, k = a.get("strides", [1])[0], a.get("pads", [0])[0], w.shape[2]
-            assert a.get("group", 1) == 1 and a.get("dilations", [1])[0] == 1
-            assert (k, p) in ((3, 1), (1, 0)), (n.name, k, p)
+            require(a.get("group", 1) == 1 and a.get("dilations", [1, 1]) == [1, 1],
+                    (n.name, "group/dilations", a.get("group", 1), a.get("dilations", [1, 1])))
+            require(w.ndim == 4 and w.shape[2] == w.shape[3], (n.name, "weight shape", w.shape))
+            require(a.get("strides", [1, 1]) == [s, s], (n.name, "asymmetric strides", a.get("strides")))
+            require(a.get("pads", [0, 0, 0, 0]) == [p, p, p, p], (n.name, "asymmetric pads", a.get("pads")))
+            require((k, p) in ((3, 1), (1, 0)), (n.name, k, p))
             N, C, H, W = src
-            assert C == w.shape[1], (n.name, C, w.shape)
+            require(C == w.shape[1], (n.name, C, w.shape))
             ho, wo = (H + 2 * p - k) // s + 1, (W + 2 * p - k) // s + 1
             shapes[out] = (N, int(w.shape[0]), ho, wo)
             ops.append(Op("conv", f"c{counts['conv']:02d}", ins, out, weight=w.astype(np.float32),
@@ -118,30 +128,30 @@ def load(size: int = INPUT_SIZE, path: Path | None = None) -> Graph:
             counts["bn"] += 1
         elif t == "PRelu":
             slope = init[n.input[1]].astype(np.float64).reshape(-1)
-            assert slope.size == src[1], (n.name, slope.shape, src)
+            require(slope.size == src[1], (n.name, slope.shape, src))
             shapes[out] = src
             ops.append(Op("prelu", out, ins, out, slope=slope, out_shape=src))
         elif t == "Add":
-            assert shapes[ins[0]] == shapes[ins[1]], (out, shapes[ins[0]], shapes[ins[1]])
+            require(shapes[ins[0]] == shapes[ins[1]], (out, shapes[ins[0]], shapes[ins[1]]))
             shapes[out] = src
             ops.append(Op("add", out, ins, out, out_shape=src))
         elif t == "Flatten":
-            assert a.get("axis", 1) == 1, a
+            require(a.get("axis", 1) == 1, a)
             N, C, H, W = src
             shapes[out] = (N, C * H * W)
             ops.append(Op("flatten", out, ins, out, out_shape=shapes[out]))
         elif t == "Gemm":
-            assert a.get("alpha", 1.0) == 1.0 and a.get("beta", 1.0) == 1.0, a
-            assert a.get("transA", 0) == 0 and a.get("transB", 0) == 1, a
+            require(a.get("alpha", 1.0) == 1.0 and a.get("beta", 1.0) == 1.0, a)
+            require(a.get("transA", 0) == 0 and a.get("transB", 0) == 1, a)
             w, b = init[n.input[1]], init[n.input[2]]          # [N][K], [N]
-            assert src[1] == w.shape[1], (src, w.shape)
+            require(src[1] == w.shape[1], (src, w.shape))
             shapes[out] = (src[0], int(w.shape[0]))
             ops.append(Op("gemm", "fc", ins, out, weight=w.astype(np.float32), bias=b.astype(np.float32),
                           out_shape=shapes[out]))
         else:
             raise NotImplementedError(t)
 
-    assert len(g.output) == 1, [o.name for o in g.output]
+    require(len(g.output) == 1, [o.name for o in g.output])
     graph = Graph(ops=ops, input=g.input[0].name, output=g.output[0].name, shapes=shapes, size=size)
     _check_structure(graph)
     return graph
@@ -155,22 +165,24 @@ def _check_structure(graph: Graph) -> None:
             # A BN is folded into its one consumer: a stride-1 3x3 conv (border-bias
             # fold), the Flatten (into the Gemm), or nothing (the final BN, into the
             # Gemm's rows).
-            assert len(cons) <= 1, (op.name, [c.kind for c in cons])
+            require(len(cons) <= 1, (op.name, [c.kind for c in cons]))
             if cons:
                 c = cons[0]
-                assert c.kind == "flatten" or (c.kind == "conv" and c.ksize == 3 and c.stride == 1), (op.name, c.kind)
+                require(c.kind == "flatten" or (c.kind == "conv" and c.ksize == 3 and c.stride == 1),
+                        (op.name, c.kind))
             else:
-                assert op.output == graph.output, op.name
+                require(op.output == graph.output, op.name)
         elif op.kind == "prelu":
             # PRelu folds into the epilogue of the conv that produces its input.
             p = graph.producer(op.inputs[0])
-            assert p is not None and p.kind == "conv" and len(graph.consumers(p.output)) == 1, op.name
+            require(p is not None and p.kind == "conv" and len(graph.consumers(p.output)) == 1, op.name)
         elif op.kind == "add":
             # Hosted on the conv producing its *first* input; the second is the shortcut.
             p = graph.producer(op.inputs[0])
-            assert p is not None and p.kind == "conv" and p.ksize == 3 and len(graph.consumers(p.output)) == 1, op.name
+            require(p is not None and p.kind == "conv" and p.ksize == 3 and len(graph.consumers(p.output)) == 1,
+                    op.name)
         elif op.kind == "conv" and op.ksize == 1:
-            assert op.stride == 2, op.name
+            require(op.stride == 2, op.name)
 
 
 if __name__ == "__main__":

@@ -86,13 +86,16 @@ class ArcFaceLoom:
         self.weights = _path(weights, "ARCFACE_LOOM_WEIGHTS", ROOT / "build/weights")
         self.kernels = _path(kernels, "ARCFACE_LOOM_KERNELS", ROOT / "build/kernels")
         self.library = _path(library, "ARCFACE_LOOM_LIBRARY", ROOT / "build/libarcface.so")
-        for path, hint in (
-            (self.library, "./scripts/build_host.sh"),
-            (self.kernels, "./scripts/build_kernels.sh"),
-            (self.weights, "python3 tools/export_weights.py"),
+        for path, environment, hint, source_path in (
+            (self.library, "ARCFACE_LOOM_LIBRARY", "./scripts/build_host.sh", ROOT / "scripts/build_host.sh"),
+            (self.kernels, "ARCFACE_LOOM_KERNELS", "./scripts/build_kernels.sh", ROOT / "scripts/build_kernels.sh"),
+            (self.weights, "ARCFACE_LOOM_WEIGHTS", "python3 tools/export_weights.py", ROOT / "tools/export_weights.py"),
         ):
             if not path.exists():
-                raise FileNotFoundError(f"{path} is missing; run: {hint}")
+                advice = f"set {environment} to its location"
+                if source_path.exists():
+                    advice += f" or run from the source checkout: {hint}"
+                raise FileNotFoundError(f"{path} is missing; {advice}")
 
         try:
             native = ctypes.CDLL(self.library)
@@ -181,14 +184,20 @@ class ArcFaceLoom:
 
     def close(self) -> None:
         """Release all GPU allocations and loaded modules; safe to call twice."""
+        # Check this before touching the lock. If another thread owned the lock
+        # when the process forked, the child's copy can never be acquired because
+        # that owner thread no longer exists. HIP state must not be destroyed in
+        # the child, so simply invalidate its copied handle.
+        if getattr(self, "_pid", os.getpid()) != os.getpid():
+            self._handle = None
+            return
         lock = getattr(self, "_lock", None)
         if lock is None:
             return
         with lock:
             handle = getattr(self, "_handle", None)
             self._handle = None
-            # Destroying inherited HIP state in a forked child is itself unsafe.
-            if handle is not None and os.getpid() == self._pid:
+            if handle is not None:
                 self._native.arcface_destroy(handle)
 
     def __enter__(self) -> ArcFaceLoom:
@@ -220,6 +229,9 @@ class ArcFaceLoom:
             raise ValueError(f"expected (B, {self.size}, {self.size}, 3) uint8 BGR crops, got {stacked.shape} {stacked.dtype}")
         batch = stacked.shape[0]
         out = np.empty((batch, self.embedding_size), np.float32)
+        # This must precede lock acquisition: an RLock copied while held by a
+        # different thread cannot be acquired in the forked child.
+        self._ensure_usable()
         with self._lock:
             self._ensure_usable()
             for start in range(0, batch, self.max_batch):
@@ -246,7 +258,9 @@ class ArcFaceLoom:
         if kps.ndim != 3 or kps.shape[1:] != (5, 2):
             raise ValueError(f"expected (n, 5, 2) landmarks, got {kps.shape}")
         if len(kps) == 0:
-            return np.empty((0, self.embedding_size), np.float32)
+            # Route the no-op through the same lifecycle checks as every other
+            # inference call, including closed and fork-inherited sessions.
+            return self.get_feat(np.empty((0, self.size, self.size, 3), np.uint8))
         return self.get_feat(np.stack([norm_crop(img, k, self.size) for k in kps]))
 
     compute_sim = staticmethod(compute_sim)

@@ -164,6 +164,13 @@ Needs the Loom toolchain from [ROCm/hrx-system](https://github.com/ROCm/hrx-syst
 (`scripts/env.sh` points at the build) and ROCm for `hipcc`; `requirements.txt`
 for Python; the `w600k_r50.onnx` file from insightface's `buffalo_l` pack.
 
+The repository checkout is the self-building distribution. A wheel built from
+`pyproject.toml` contains only the portable Python loader; it deliberately does
+not bundle the model weights, gfx1151 HSACOs or ROCm-linked native library. To
+use that loader outside a checkout, provide all three external asset locations
+with `ARCFACE_LOOM_WEIGHTS`, `ARCFACE_LOOM_KERNELS` and
+`ARCFACE_LOOM_LIBRARY`.
+
 ```console
 $ pip install -r requirements.txt
 $ pip install -e .

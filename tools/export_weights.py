@@ -42,6 +42,12 @@ CIN_ALIGN, K_ALIGN, COUT_ALIGN = 8, 32, 64   # the conv gathers vector<8xf16>
 BORDER_CLASSES = 9
 
 
+def require(condition: bool, detail) -> None:
+    """Keep export invariants active under ``python -O``/PYTHONOPTIMIZE."""
+    if not condition:
+        raise ValueError(f"cannot export ArcFace weights: {detail}")
+
+
 def align(n: int, a: int) -> int:
     return (n + a - 1) // a * a
 
@@ -58,7 +64,7 @@ def head_splits(k_size: int) -> int:
     counts are the divisors of 784 from 4 up; 28 gives 8 x 28 = 224 workgroups of 28
     k-steps each (measured against 4..196 in tools/test_head.py, docs/notes.md)."""
     splits = 28
-    assert k_size % (32 * splits) == 0, (k_size, splits)
+    require(k_size % (32 * splits) == 0, (k_size, splits))
     return splits
 
 
@@ -72,7 +78,7 @@ def border_class(ho: int, wo: int) -> np.ndarray:
     """[ho*wo] int: which of the 9 (dy, dx) tap subsets a stride-1 pad-1 3x3 conv
     sees inside the image at each output pixel: rows 0/1/2 = top/mid/bottom,
     columns 0/1/2 = left/mid/right, class = row*3 + column."""
-    assert ho >= 2 and wo >= 2, (ho, wo)
+    require(ho >= 2 and wo >= 2, (ho, wo))
     ry = np.full(ho, 1); ry[0] = 0; ry[-1] = 2
     rx = np.full(wo, 1); rx[0] = 0; rx[-1] = 2
     return (ry[:, None] * 3 + rx[None, :]).reshape(-1)
@@ -90,7 +96,7 @@ def fold_bn_conv(scale: np.ndarray, shift: np.ndarray, weight: np.ndarray, bias:
     """BN(scale, shift) followed by a stride-1 pad-1 3x3 conv (weight [Cout][Cin][3][3],
     bias [Cout]) -> (weight' [Cout][Cin][3][3], bias' [9][Cout]), float64."""
     w = weight.astype(np.float64)
-    assert w.shape[2:] == (3, 3), w.shape
+    require(w.shape[2:] == (3, 3), w.shape)
     w_scaled = w * scale.reshape(1, -1, 1, 1)
     # per tap, the shift's contribution: [9][Cout]
     per_tap = np.einsum("ocyx,c->oyx", w, shift).reshape(w.shape[0], 9)
@@ -102,7 +108,7 @@ def fold_bn_conv(scale: np.ndarray, shift: np.ndarray, weight: np.ndarray, bias:
 
 def centre_tap(weight: np.ndarray) -> np.ndarray:
     """[Cout][Cin][1][1] -> [Cout][Cin][3][3] with the kernel at (1, 1)."""
-    assert weight.shape[2:] == (1, 1), weight.shape
+    require(weight.shape[2:] == (1, 1), weight.shape)
     w = np.zeros(weight.shape[:2] + (3, 3), weight.dtype)
     w[:, :, 1, 1] = weight[:, :, 0, 0]
     return w
@@ -113,7 +119,7 @@ def fold_head(bn_in: G.Op, fc: G.Op, bn_out: G.Op, hw: int, channels: int):
     column order p*C + c, bias [N]), float64."""
     w = fc.weight.astype(np.float64)                    # [N][K], k = c*hw + p
     n, k = w.shape
-    assert k == channels * hw, (k, channels, hw)
+    require(k == channels * hw, (k, channels, hw))
     a1 = np.repeat(bn_in.scale, hw)                     # per column k
     s1 = np.repeat(bn_in.shift, hw)
     w1 = w * a1[None, :]
@@ -128,7 +134,7 @@ def fold_head(bn_in: G.Op, fc: G.Op, bn_out: G.Op, hw: int, channels: int):
 def pack(weight: np.ndarray, cout_align: int | None = None, cin_align: int = CIN_ALIGN) -> tuple[np.ndarray, dict]:
     """[Cout][Cin][3][3] -> W16[Cout_pad][K_pad] in gather order, plus shape info."""
     cout, cin, k, _ = weight.shape
-    assert k == 3, weight.shape
+    require(k == 3 and weight.shape[3] == 3, weight.shape)
     cout_pad = align(cout, cout_align or COUT_ALIGN)
     cin_pad = align(cin, cin_align)
     k_pad = align(k * k * cin_pad, K_ALIGN)
@@ -166,9 +172,9 @@ def conv_roles(graph: G.Graph) -> dict[str, dict]:
             variant = "bnprelu"
         else:
             variant = "prelu"
-        assert (variant == "plain") == (op.ksize == 1)
-        assert (variant in ("prelu", "bnprelu")) == (prelu is not None), op.name
-        assert (variant == "bnprelu") == (bn is not None), op.name
+        require((variant == "plain") == (op.ksize == 1), op.name)
+        require((variant in ("prelu", "bnprelu")) == (prelu is not None), op.name)
+        require((variant == "bnprelu") == (bn is not None), op.name)
         roles[op.name] = dict(variant=variant, bn=bn, prelu=prelu, add=add)
     return roles
 
@@ -177,9 +183,13 @@ def head_ops(graph: G.Graph) -> tuple[G.Op, G.Op, G.Op]:
     """(BN before the flatten, the Gemm, the BN after it)."""
     fc = next(op for op in graph.ops if op.kind == "gemm")
     flat = graph.producer(fc.inputs[0])
+    require(flat is not None and flat.kind == "flatten", "Gemm input must be produced by Flatten")
     bn_in = graph.producer(flat.inputs[0])
-    bn_out = graph.consumers(fc.output)[0]
-    assert flat.kind == "flatten" and bn_in.kind == "bn" and bn_out.kind == "bn"
+    consumers = graph.consumers(fc.output)
+    require(len(consumers) == 1, "Gemm output must have exactly one consumer")
+    bn_out = consumers[0]
+    require(bn_in is not None and bn_in.kind == "bn" and bn_out.kind == "bn",
+            "head must be BatchNorm -> Flatten -> Gemm -> BatchNorm")
     return bn_in, fc, bn_out
 
 
@@ -222,7 +232,7 @@ def main() -> None:
     bn_in, fc, bn_out = head_ops(graph)
     _, c, h, w_ = graph.shapes[bn_in.output]
     w_fc, b_fc = fold_head(bn_in, fc, bn_out, h * w_, c)
-    assert w_fc.shape[1] % K_ALIGN == 0 and w_fc.shape[0] % COUT_ALIGN == 0, w_fc.shape
+    require(w_fc.shape[1] % K_ALIGN == 0 and w_fc.shape[0] % COUT_ALIGN == 0, w_fc.shape)
     emit16("fc", w_fc.astype(np.float16))
     emit32("fc_b", b_fc)
     shapes.append(f"fc k={w_fc.shape[1]} n={w_fc.shape[0]} variant=head bias_rows=1")

@@ -17,7 +17,7 @@ tensor of the output's shape. Extra launch operands are appended in the order
 (residual, slope), which host/arcface.cpp follows from the generated table.
 
 Each variant is produced by literal anchored edits, the way the siblings' generators
-work: if the source moves, the assert fails loudly rather than generating something
+work: if the source moves, generation fails loudly rather than producing something
 subtly wrong.
 """
 from __future__ import annotations
@@ -92,10 +92,15 @@ VARIANTS = {
 }
 
 
+def require(condition: bool, detail: str) -> None:
+    if not condition:
+        raise RuntimeError(detail)
+
+
 def generate(variant: str, text: str, source: str, symbol: str, namespace: str) -> str:
     spec = VARIANTS[variant]
     for anchor in (LAUNCH, C_VIEW, BIAS_VIEW, BIAS_LOAD, BIAS_ADD, STORE, ZERO4):
-        assert text.count(anchor) == 1, f"{source}: anchor x{text.count(anchor)}\n{anchor[:90]}"
+        require(text.count(anchor) == 1, f"{source}: anchor x{text.count(anchor)}\n{anchor[:90]}")
     out = text
     launch = LAUNCH
     views = C_VIEW
