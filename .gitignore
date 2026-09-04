@@ -1,0 +1,6 @@
+build/
+host/arcface
+host/loomrun
+__pycache__/
+*.pyc
+*.egg-info/
