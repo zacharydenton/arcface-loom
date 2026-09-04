@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Compile every kernel the recogniser launches, at the configuration it launches it.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+source scripts/env.sh
+out=build/kernels
+mkdir -p "$out"
+
+compile() { # source-stem root-symbol output-stem config...
+  local src="kernels/$1.loom" root="$2" stem="$3"; shift 3
+  local args=()
+  for c in "$@"; do args+=("--config=$c"); done
+  "$LOOM_COMPILE" "$src" --backend=amdgpu-hal --target="$LOOM_TARGET" \
+    --root="@$root" "${args[@]}" --output="$out/$stem.hsaco"
+  printf '  %-48s %s\n' "$stem" "$(stat -c%s "$out/$stem.hsaco") bytes"
+}
+
+echo "compiling for $LOOM_TARGET"
+
+# Stem input: aligned BGR uint8 crop -> normalised RGB NHWC f16, 3 channels padded to 8.
+compile hwc_u8_to_nhwc_f16 arcface_hwc_u8_to_nhwc_f16 hwc_u8_to_nhwc arcface.hwc_u8_to_nhwc_f16.size=112
+
+# Everything the graph launches, one line per distinct (kernel, config), generated
+# by tools/gen_launch_table.py from the ONNX file.
+source scripts/kernels.generated
