@@ -87,7 +87,27 @@ are cosine 0.99998 either way (`docs/notes.md`).
 
 ## Benchmark
 
-<!-- BENCH -->
+`tools/benchmark.py` times what a caller pays after alignment: `ArcFaceLoom.get_feat`
+on aligned crops (upload, the network, download), interleaved with onnxruntime's
+MIGraphX provider on the same box, best of three rounds. Unlike scrfd-loom's
+detector graph, this one accepts a batch -- it only *declares* `[1, 512]` -- so
+MIGraphX is timed batched too, each shape compiled once (about a minute). Measured
+on a Radeon 8060S (gfx1151) with other CPU jobs resident, so treat the absolute
+numbers as a floor.
+
+| configuration | img/s | ms/img | vs MIGraphX b1 |
+| --- | ---: | ---: | ---: |
+| arcface-loom `get_feat`, batch 32 | **1658.2** | 0.603 | **9.80x** |
+| arcface-loom `get_feat`, batch 16 | 1583.4 | 0.632 | 9.36x |
+| arcface-loom `get_feat`, batch 8 | 1491.4 | 0.671 | 8.81x |
+| onnxruntime + MIGraphX, batch 16 | 440.3 | 2.271 | 2.60x |
+| arcface-loom `get_feat`, batch 1 | 411.8 | 2.428 | 2.43x |
+| onnxruntime + MIGraphX, batch 1 | 169.3 | 5.908 | 1.00x |
+
+Loom is ahead of MIGraphX at every matched batch: 2.4x at batch 1, 3.6x at
+batch 16, and 9.8x at its own batch 32 over MIGraphX's batch-1 latency. The native
+call alone (`host/arcface --repeat`: upload, 56 launches, download) reaches 1626
+img/s at batch 32 and 399 at batch 1; `get_feat` adds only the host copies.
 
 Where the time goes at batch 6 (`host/arcface --profile`): the 14x14 stage (256
 channels, 14 blocks) is 47% of it, as its 53% share of the FLOPs predicts; the
