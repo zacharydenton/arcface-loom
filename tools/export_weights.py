@@ -53,6 +53,15 @@ def tile_for(n_size: int) -> int:
     return 128 if n_size == 128 else 64
 
 
+def head_splits(k_size: int) -> int:
+    """Split count of the head's split-K matmul. K = 25088 = 784 * 32, so the legal
+    counts are the divisors of 784 from 4 up; 28 gives 8 x 28 = 224 workgroups of 28
+    k-steps each (measured against 4..196 in tools/test_head.py, docs/notes.md)."""
+    splits = 28
+    assert k_size % (32 * splits) == 0, (k_size, splits)
+    return splits
+
+
 def storage_stride(channels: int) -> int:
     """Physical channel stride of an NHWC activation: every conv writes its
     Cout_pad (64-aligned) columns; the converted stem image is the one 8-wide tensor."""
