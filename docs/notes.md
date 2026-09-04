@@ -58,3 +58,44 @@ activations):
 
 f16 rounding of the folded weights: the dead channels' scaled weights underflow to zero,
 which is correct to 1e-26 of the activation.
+
+## The host
+
+56 launches, 4 buffers, 3.8 MB/image. The launch table, buffer assignment and
+kernel build list are generated from the graph by `tools/gen_launch_table.py`;
+`host/arcface.cpp` only knows how to build the kernarg block per kernel kind.
+Each launch carries an ordered aux list (`residual`, `slope`) so the kernarg
+layout `(m, a, w, bias, c, [residual], [slope])` is generated, not transcribed.
+
+### The kernarg landmine
+
+`index` kernargs occupy 8 bytes in Loom's AMDGPU ABI, but the host packs `m_size`
+with a 4-byte `scalar_i32` (the siblings do the same and it is fine there). The
+conv kernels re-derive a bounded `m` through `index.assume [range(1, ...)]`, which
+masks the garbage upper half. The split-K head matmul, inherited from dinov3-loom,
+guards its A load on the **raw** `%m_size` (`cmp ult source_m, %m_size`), so the
+uninitialised upper 4 bytes made the guard always true and it read the A tensor
+hundreds of rows out of bounds -- a GPU page fault that only appeared through the
+resident library, because the CLI's stack happened to be zero. Fix: zero-init the
+kernarg scratch buffer (`unsigned char bytes[128] = {}`), one line in
+`host/arcface.cpp`. Bisected with `AMD_SERIALIZE_KERNEL=3`, which names the
+faulting shader.
+
+## Levers (measured, one inference path kept)
+
+Not yet chased; recorded for the next pass:
+
+1. **Batch-1 occupancy.** The 14x14 stage (256 ch, 14 blocks, 53% of FLOPs) runs
+   16 workgroups at batch 1 and the 7x7 stage 8, against ~120 slots on 40 CUs. The
+   head already uses split-K for exactly this reason; a split-K conv with the
+   epilogue in the reduce would do the same for those two stages.
+2. **The batch-1 weight floor.** 87 MB of f16 weights (25.7 MB in the fc) stream
+   from DRAM every forward whatever the batch; batching amortises it, which is why
+   the honest throughput figure is per face at a batch, not batch-1 latency.
+3. **`matmul_stride2`.** The four 1x1 stride-2 shortcuts run as centre-tap 3x3
+   stride-2 convs -- 9x the MMA work on 4.6% of the FLOPs. A dedicated stride-2
+   1x1 matmul would remove that; small.
+4. **The n128 tile** is used where the padded output width is exactly 128 (the
+   28x28 stage), inherited from scrfd-loom's policy; re-measure here.
+5. **Head split count** is 28 (K = 25088 = 784*32; 28 gives 8*28 = 224 workgroups).
+   `tools/test_head.py` sweeps 4..196; 16-56 are within noise at batch 5.
