@@ -4,3 +4,5 @@ host/loomrun
 __pycache__/
 *.pyc
 *.egg-info/
+.venv/
+dist/

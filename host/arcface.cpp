@@ -205,7 +205,7 @@ public:
                                         " (max_batch at creation), got " + std::to_string(batch));
     }
 
-    void upload(const uint8_t *input, size_t bytes, int batch) {
+    void check_input(const uint8_t *input, size_t bytes, int batch) const {
         if (!input) throw std::invalid_argument("input must not be null");
         check_batch(batch);
         const size_t want = input_bytes(batch);
@@ -213,7 +213,6 @@ public:
             throw std::invalid_argument("input has " + std::to_string(bytes) + " bytes; batch " +
                                         std::to_string(batch) + " requires exactly " + std::to_string(want) +
                                         " (" + std::to_string(SIZE) + "x" + std::to_string(SIZE) + " BGR uint8 per image)");
-        HIP_CHECK(hipMemcpyAsync(input_, input, want, hipMemcpyHostToDevice, stream_));
     }
 
     void forward(int batch) {
@@ -265,17 +264,27 @@ public:
     // One call of the ABI: validate everything before touching the GPU.
     void session_run(const uint8_t *input, size_t bytes, int batch, float *embeddings, size_t embeddings_elements) {
         std::lock_guard<std::mutex> lock(mutex_);
-        check_batch(batch);
+        if (failed_) throw std::runtime_error("session is unusable after failed GPU recovery; create a new session");
+        check_input(input, bytes, batch);
         if (!embeddings) throw std::invalid_argument("embeddings must not be null");
         if (embeddings_elements != output_elements(batch))
             throw std::invalid_argument("embeddings has " + std::to_string(embeddings_elements) +
                                         " f32 elements; batch " + std::to_string(batch) + " requires exactly " +
                                         std::to_string(output_elements(batch)) + " (batch * " +
                                         std::to_string(ARCFACE_EMBEDDING) + ")");
-        upload(input, bytes, batch);
-        forward(batch);
-        download(batch);
-        synchronize();
+        try {
+            HIP_CHECK(hipMemcpyAsync(input_, input, bytes, hipMemcpyHostToDevice, stream_));
+            forward(batch);
+            download(batch);
+            synchronize();
+        } catch (...) {
+            // A launch can fail after an asynchronous upload was accepted. Drain
+            // the stream while holding the session lock, before the caller can
+            // reuse its input (which may be pinned memory). Preserve the original
+            // exception; a failed drain also permanently disables further runs.
+            if (hipStreamSynchronize(stream_) != hipSuccess) failed_ = true;
+            throw;
+        }
         memcpy(embeddings, output_host_, output_elements(batch) * sizeof(float));
     }
 
@@ -319,6 +328,7 @@ private:
     }
 
     int max_batch_;
+    bool failed_ = false;
     std::mutex mutex_;
     std::vector<Kernel> kernels_;
     std::vector<void *> buffers_;

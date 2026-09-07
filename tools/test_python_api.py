@@ -55,6 +55,13 @@ def main() -> int:
     cli = run_loom(crops)
 
     with ArcFaceLoom(max_batch=4) as model:
+        handle = model._handle
+        model.prepare(0)
+        model.prepare(ctx_id=np.int64(0), det_size=(640, 640))
+        check("InsightFace prepare is repeatable and preserves the resident session", model._handle is handle)
+        require_raises(ValueError, "ctx_id=0", lambda: model.prepare(-1))
+        require_raises(ValueError, "ctx_id=0", lambda: model.prepare(1))
+        require_raises(TypeError, "integer", lambda: model.prepare(0.5))
         assert model._native.arcface_max_batch(model._handle) == 4
         feats = model.get_feat(crops)                                 # 6 crops through a 4-crop session: two calls
         check("get_feat on a stacked array == the CLI, bit for bit, across chunking", np.array_equal(feats, cli))
@@ -108,6 +115,7 @@ def main() -> int:
     assert model.closed
     model.close()
     require_raises(ArcFaceError, "closed", lambda: model.get_feat(crops))
+    require_raises(ArcFaceError, "closed", lambda: model.prepare(0))
     require_raises(ArcFaceError, "closed", lambda: model.embed(img, np.empty((0, 5, 2), np.float32)))
     check("closed sessions refuse calls, including empty embed", True)
 
@@ -129,6 +137,7 @@ def main() -> int:
     inherited._pid = -1
     inherited._lock = MustNotLock()
     require_raises(ArcFaceError, "fork", lambda: inherited.get_feat(crops[:1]))
+    require_raises(ArcFaceError, "fork", lambda: inherited.prepare(0))
     inherited.close()
     check("fork-inherited sessions reject without acquiring a possibly orphaned lock", inherited.closed)
     return 0 if ok else 1

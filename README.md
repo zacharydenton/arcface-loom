@@ -1,209 +1,128 @@
 # arcface-loom
 
-insightface's `w600k_r50` face recogniser (ArcFace, an iResNet-50) written in
-**Loom**, AMD's kernel language from [ROCm/hrx-system](https://github.com/ROCm/hrx-system),
-for the Radeon 8060S (gfx1151) in a Strix Halo APU. The third sibling of
-[dinov3-loom](https://github.com/zacharydenton/dinov3-loom) and
-[scrfd-loom](https://github.com/zacharydenton/scrfd-loom), and it reuses their
-convolution: with scrfd-loom it runs the whole `buffalo_l` face pipeline --
-detect, align, embed -- on Loom.
+InsightFace's `w600k_r50` face recogniser implemented in
+[Loom](https://github.com/ROCm/hrx-system) for the AMD Radeon 8060S (gfx1151).
+It converts aligned 112×112 BGR crops into 512-dimensional face embeddings.
 
-It is a drop-in for insightface's `ArcFaceONNX`: the same alignment (insightface's
-`norm_crop`, vendored), the same normalisation, only the network replaced. On the
-six faces of the sample image its 512-d embeddings agree with onnxruntime to
-cosine 0.99999 and with insightface's own embeddings to 0.99998, and the 6x6
-face-similarity matrix -- what recognition actually uses -- matches insightface's
-to 0.0002.
+The network runs in f16 with f32 accumulation. Alignment and input normalisation
+follow InsightFace. Kernels, weights and GPU buffers stay resident between calls.
+With [scrfd-loom](https://github.com/zacharydenton/scrfd-loom), it supports the
+`buffalo_l` detect → align → embed pipeline.
 
-## Why
+## Performance and validation
 
-The deployed model is an ONNX file, and the way to run it on this iGPU is
-onnxruntime's MIGraphX provider. The question the siblings ask is whether that
-provider's number is the silicon or the toolchain; Loom lets you write the
-convolution directly, so the way to find out is to write it. This repo answers it
-for the recogniser, reusing scrfd-loom's implicit-GEMM 3x3 conv unchanged and
-adding only what ArcFace needs.
+Measured on a Radeon 8060S, including crop upload, inference and embedding
+download. Alignment is excluded. Results are the best of three interleaved
+rounds with other CPU jobs running.
 
-## Model
-
-`w600k_r50.onnx` (glint360k R50) from insightface's `buffalo_l` pack: input a
-112x112 aligned face crop, output an un-normalised 512-d embedding. An iResNet-50:
-a stem, 24 residual blocks in four stages (planes 112/56/28/14/7, widths
-64/128/256/512, [3,4,14,3] blocks) of `BN -> Conv3x3 -> PReLU -> Conv3x3 ->
-Add(shortcut)`, then `BN -> Flatten -> Gemm(25088->512) -> BN`. 43.6 M
-parameters, 87 MB in f16, 25.7 MB of it in the final fully-connected layer.
-PReLU is the only nonlinearity; there is no pooling.
-
-## Status
-
-Complete, validated, benchmarked. One inference path, ten kernel sources, all of
-them scrfd-loom's or dinov3-loom's with the epilogue changed:
-
-| kernel | what |
-| --- | --- |
-| `conv3x3_f16_wmma` (+ the `n128` 64x128-tile family) with `prelu`, `bnprelu`, `add` epilogues | scrfd-loom's implicit-GEMM 3x3 conv -- the WMMA matmul with its A-staging load replaced by an 8-wide im2col gather that runs one step ahead of the multiply, so the `[M][K]` matrix never exists. 49 of the 53 convs. `prelu` is `max(x,0) + slope[n]*min(x,0)`; `bnprelu` folds the preceding BatchNorm into the weights and a 9-entry border-bias table read per output pixel; `add` folds the residual |
-| `matmul_splitk_f16_wmma` + `splitk_reduce_f32` | the 25088->512 head, M = batch. dinov3-loom's split-K matmul, K widened past 8192 and the split count a config, so a handful of 64x64 tiles become hundreds of workgroups across the 40 CUs; the reduce sums the partials and adds the bias in f32 |
-| `hwc_u8_to_nhwc_f16` | the aligned BGR uint8 crop to normalised RGB NHWC f16: insightface's `(x-127.5)/127.5` with swapRB in one pass, so the host uploads bytes, never a blob |
-| `im2col_f16` | the explicit gather -- the reference for the implicit one, and the permanent fallback |
-
-Every BatchNorm, PReLU and Add is folded away: **56 launches per forward pass**,
-from 130 ONNX nodes, four buffers, 3.8 MB per image. `tools/gen_launch_table.py`
-generates that schedule, the buffer assignment and the kernel build list from the
-ONNX file; nothing about the network is transcribed by hand. Activations are NHWC
-f16, weights f16, accumulation f32 throughout.
-
-The 26 BatchNorms cannot be folded into the following conv by the usual
-weights-and-bias trick, because several have per-channel scales near 1e-26 (dead
-channels) that would need bias corrections of 1e32. The block BNs fold into the
-next conv's weights plus a **9-entry border-bias table** -- one bias per
-(top/mid/bottom x left/mid/right) output-pixel class, because the conv zero-pads
-*after* the BatchNorm so a border pixel misses the shift of its outside taps. The
-head's two BatchNorms fold exactly into the Gemm's columns and rows. All three
-folds are checked in float64 against the unfolded graph (`tools/test_export_fold.py`).
-
-## Correctness
-
-`tools/reference.py` is a float64 NumPy interpreter of the ONNX graph, agreeing
-with onnxruntime to 5e-7 of the output's range. Every kernel is graded against it,
-not against onnxruntime, so a kernel bug cannot hide behind a matching bug in the
-harness. End to end (`tools/validate.py`), the 512-d embedding of each of the six
-faces of the sample image:
-
-```
-  PASS face 0 vs onnxruntime: cosine=0.9999993
-  ...
-  PASS vs insightface's own embeddings: cosine min=0.9999979
-  PASS 6x6 similarity matrix vs insightface: max |delta| = 0.0002
-  PASS batch 6 equals 6 batch-1 runs bit for bit
-```
-
-The insightface check is against a fixture of insightface's *own*
-`ArcFaceONNX.get()` embeddings, captured once with the real package, so the
-vendored alignment and the whole recogniser are graded against production. The
-alignment reproduces insightface's `norm_crop` -- a scikit-image Umeyama fit,
-which insightface runs in float32, so the crop is bit-identical under the BLAS
-that captured the fixture and within a pixel level under another; the embeddings
-are cosine 0.99998 either way (`docs/notes.md`).
-
-## Benchmark
-
-`tools/benchmark.py` times what a caller pays after alignment: `ArcFaceLoom.get_feat`
-on aligned crops (upload, the network, download), interleaved with onnxruntime's
-MIGraphX provider on the same box, best of three rounds. Unlike scrfd-loom's
-detector graph, this one accepts a batch -- it only *declares* `[1, 512]` -- so
-MIGraphX is timed batched too, each shape compiled once (about a minute). Measured
-on a Radeon 8060S (gfx1151) with other CPU jobs resident, so treat the absolute
-numbers as a floor.
-
-| configuration | img/s | ms/img | vs MIGraphX b1 |
+| Runtime | Batch | Images/s | ms/image |
 | --- | ---: | ---: | ---: |
-| arcface-loom `get_feat`, batch 32 | **1658.2** | 0.603 | **9.80x** |
-| arcface-loom `get_feat`, batch 16 | 1583.4 | 0.632 | 9.36x |
-| arcface-loom `get_feat`, batch 8 | 1491.4 | 0.671 | 8.81x |
-| onnxruntime + MIGraphX, batch 16 | 440.3 | 2.271 | 2.60x |
-| arcface-loom `get_feat`, batch 1 | 411.8 | 2.428 | 2.43x |
-| onnxruntime + MIGraphX, batch 1 | 169.3 | 5.908 | 1.00x |
+| arcface-loom | 1 | 411.8 | 2.428 |
+| ONNX Runtime + MIGraphX | 1 | 169.3 | 5.908 |
+| arcface-loom | 16 | 1583.4 | 0.632 |
+| ONNX Runtime + MIGraphX | 16 | 440.3 | 2.271 |
+| arcface-loom | 32 | 1658.2 | 0.603 |
 
-Loom is ahead of MIGraphX at every matched batch: 2.4x at batch 1, 3.6x at
-batch 16, and 9.8x at its own batch 32 over MIGraphX's batch-1 latency. The native
-call alone (`host/arcface --repeat`: upload, 56 launches, download) reaches 1626
-img/s at batch 32 and 399 at batch 1; `get_feat` adds only the host copies.
+At matched batch sizes, these measurements show **2.4× at batch 1** and
+**3.6× at batch 16**. See [benchmark output](docs/benchmark-2026-09-04.txt)
+and [`tools/benchmark.py`](tools/benchmark.py) for the comparison.
 
-Where the time goes at batch 6 (`host/arcface --profile`): the 14x14 stage (256
-channels, 14 blocks) is 47% of it, as its 53% share of the FLOPs predicts; the
-25088->512 head is 3%. At batch 1 most of the network runs at low occupancy -- the
-14x14 stage launches 16 workgroups and the 7x7 stage 8, against ~120 slots on 40
-CUs -- and every forward streams the 87 MB of weights from DRAM regardless of
-batch, so batched throughput per face is the honest figure. `docs/notes.md`
-records the levers.
+On the six faces in InsightFace's sample image, embeddings agree with its
+reference embeddings to a minimum cosine similarity of **0.9999979**. The 6×6
+similarity matrix differs by at most **0.0002**; batch-6 results equal six
+batch-1 calls bit for bit. Tests also compare individual kernels and weight
+folds against a float64 NumPy reference.
 
-## Replacing insightface
+These checks establish numerical agreement on that fixture. They do not establish
+recognition accuracy or ranking preservation for other galleries. Small score
+changes can reorder close matches or cross a threshold; validate your own data
+before replacing a deployed recogniser.
+
+## Build
+
+Requires Linux x86-64, a gfx1151 GPU, ROCm, Python 3.11+, the Loom compiler, and
+`w600k_r50.onnx` from InsightFace's `buffalo_l` pack.
+
+Follow [the build guide](docs/building.md) to install the pinned public Loom
+revision and obtain and verify the model. Then, from this checkout:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install -e .
+source scripts/env.sh
+python tools/export_weights.py
+python tools/gen_launch_table.py
+./scripts/build_kernels.sh
+./scripts/build_host.sh
+./scripts/test.sh
+```
+
+`test.sh` rebuilds the assets and runs the full suite. `--quick` skips the final
+alignment/reference/end-to-end/API group; it still needs the GPU and model.
+CPU ONNX Runtime is sufficient for validation. The benchmark needs a MIGraphX
+build of ONNX Runtime.
+
+The Python wheel contains only the loader and alignment code. When using it
+outside a checkout, set `ARCFACE_LOOM_WEIGHTS`, `ARCFACE_LOOM_KERNELS` and
+`ARCFACE_LOOM_LIBRARY` to the exported weights, compiled kernels and
+`libarcface.so`. Build and runtime overrides are listed in the
+[build guide](docs/building.md#paths-and-runtime-selection).
+
+## Python API
 
 ```python
-# before
-from insightface.model_zoo.arcface_onnx import ArcFaceONNX
-model = ArcFaceONNX("~/.insightface/models/buffalo_l/w600k_r50.onnx")
-model.prepare(ctx_id=0)
-embedding = model.get(image_bgr, face)          # face.kps from the detector
-
-# after
 from arcface_loom import ArcFaceLoom
-model = ArcFaceLoom()
-embedding = model.get(image_bgr, face)          # same (512,) f32 embedding
+
+with ArcFaceLoom(max_batch=16) as model:
+    embedding = model.get(image_bgr, face)  # face.kps: five landmarks
+    embeddings = model.get_feat(crops)     # (B, 112, 112, 3) uint8 BGR
 ```
 
-`get(img, face)` aligns the face from its five landmarks with insightface's
-`norm_crop` and embeds the crop; `get_feat(crops)` takes already-aligned
-`(112, 112, 3)` uint8 BGR crops (a list or a stacked array) and returns
-`(n, 512)`, up to `max_batch` (default 16) per GPU call; `embed(img, kps_array)`
-does many faces of one image; `compute_sim` is insightface's cosine. The session
-is resident: kernels and weights load once, buffers are sized for `max_batch` at
-construction, and each call is one ctypes entry into `build/libarcface.so`. It is
-thread-safe, closable, and a context manager, and paths come from
-`ARCFACE_LOOM_WEIGHTS`, `ARCFACE_LOOM_KERNELS` and `ARCFACE_LOOM_LIBRARY`.
+| Method | Input | Result |
+| --- | --- | --- |
+| `get(image, face)` | BGR image and an InsightFace `Face` or `(5, 2)` landmarks | `(512,)` embedding; also sets `face.embedding` |
+| `get_feat(crops)` | One aligned crop, a list, or a stacked uint8 BGR array | `(B, 512)` embeddings, chunked at `max_batch` |
+| `embed(image, landmarks)` | BGR image and `(N, 5, 2)` landmarks | `(N, 512)` embeddings |
+| `compute_sim(a, b)` | Two embeddings | Cosine similarity |
+| `prepare(ctx_id=0)` | InsightFace preparation hook | No-op on the resident session |
 
-### What to know before swapping
+Embeddings are unnormalised float32, as returned by `ArcFaceONNX`. Calls on one
+model are serialized and thread-safe. Use `close()` or a context manager to
+release GPU resources. Create sessions after forking.
 
-- **Accuracy is cosine 0.99998 against insightface, not bitwise.** That is well
-  inside the noise for verification and clustering; if you compare against a
-  gallery built with the ONNX model, the ranking is unchanged, but rebuild the
-  gallery rather than mixing the two if you threshold tightly.
-- **The shape is fixed at 112x112 -> 512, gfx1151.** The kernels are compiled for
-  it; `LOOM_TARGET` changes the chip but nothing else here has been measured on
-  another.
-- **The embedding is un-normalised**, exactly as `ArcFaceONNX` returns it;
-  `compute_sim` and any downstream store normalise it, as insightface does.
-- **Construction is the expensive operation.** It initializes HIP, uploads the
-  weights and loads the modules once; calls after that are one upload, the
-  network, one download. Use `close()` or the context manager to release the
-  session; create models after forking, not before.
+To replace recognition in an existing InsightFace `FaceAnalysis` pipeline:
 
-## Running it
-
-Needs the Loom toolchain from [ROCm/hrx-system](https://github.com/ROCm/hrx-system)
-(`scripts/env.sh` points at the build) and ROCm for `hipcc`; `requirements.txt`
-for Python; the `w600k_r50.onnx` file from insightface's `buffalo_l` pack.
-
-The repository checkout is the self-building distribution. A wheel built from
-`pyproject.toml` contains only the portable Python loader; it deliberately does
-not bundle the model weights, gfx1151 HSACOs or ROCm-linked native library. To
-use that loader outside a checkout, provide all three external asset locations
-with `ARCFACE_LOOM_WEIGHTS`, `ARCFACE_LOOM_KERNELS` and
-`ARCFACE_LOOM_LIBRARY`.
-
-```console
-$ pip install -r requirements.txt
-$ pip install -e .
-$ source scripts/env.sh
-$ python3 tools/export_weights.py           # 54 f16 matrices with the BNs folded in, 90 MB
-$ python3 tools/gen_launch_table.py         # schedule + kernel build list from the graph
-$ ./scripts/build_kernels.sh                # 24 HSACOs
-$ ./scripts/build_host.sh                   # host/arcface CLI + build/libarcface.so
-$ ./scripts/test.sh                         # everything
+```python
+with ArcFaceLoom() as model:
+    app.models["recognition"] = model
+    app.prepare(ctx_id=0)
+    faces = app.get(image_bgr)
 ```
 
-`scripts/test.sh` is the one test command: formatting, the generated files against
-their generators, the float64 fold identities, the build, every unit test against
-float64, the runner's error paths, then the end-to-end comparisons against
-onnxruntime and insightface. `--quick` skips the last group, the only part needing
-onnxruntime. The fixture of insightface's own embeddings is regenerated with
-`tools/capture_fixture.py` (it needs scikit-image, via `uv run`).
+`prepare(0)` is repeatable. CPU fallback and other device IDs are unsupported.
+The ONNX-specific `session`, `model_file` and `forward(batch_data)` interfaces
+are not provided. Input size is fixed at 112×112; other GPUs are unvalidated.
 
-## Layout
+## Implementation
 
-```
-kernels/    the ten .loom sources and their generated epilogue variants
-host/       arcface.cpp + arcface.h (resident session, C ABI, CLI), graph_table.inc (generated),
-            loomrun.cpp (the single-kernel runner the unit tests use)
-tools/      graph.py (the ONNX graph, resolved), reference.py (the float64 oracle),
-            export_weights.py (the folds), gen_launch_table.py, gen_conv.py, gen_variants.py,
-            capture_fixture.py, tests, benchmark.py
-arcface_loom.py         the Python API
-arcface_loom_align.py   insightface's norm_crop, vendored
-docs/       notes.md -- the graph, the folds, the levers
-```
+The ONNX graph generates the launch schedule and buffer assignments. BatchNorm,
+PReLU and residual additions are folded into convolution and head operations,
+reducing the 130-node graph to 56 launches. The host uses four activation buffers
+(3.8 MB per image) and approximately 90 MB of exported weights.
 
-## Licence
+- [`kernels/`](kernels/): Loom convolution, conversion and matrix kernels.
+- [`host/`](host/): resident C ABI, inference CLI and single-kernel test runner.
+- [`tools/`](tools/): weight export, code generation, reference, tests and benchmark.
+- [Engineering notes](docs/notes.md): weight folds, kernel ABI and performance details.
 
-Apache-2.0 (`LICENSE`), matching hrx-system. `arcface_loom_align.py` reproduces
-code from insightface (MIT) and scikit-image (BSD-3); see `THIRD_PARTY_NOTICES.md`.
+## License
+
+The code is [Apache-2.0](LICENSE), with MIT and BSD-3-Clause alignment code
+covered by [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Model weights have separate terms. InsightFace distributes `buffalo_l` for
+non-commercial research; other uses require appropriate model licensing.
+Neither the ONNX model nor exported weights are included. See
+[InsightFace's license policy](https://github.com/deepinsight/insightface#license).

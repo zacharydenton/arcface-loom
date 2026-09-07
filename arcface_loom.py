@@ -217,6 +217,19 @@ class ArcFaceLoom:
             pass
 
     # --- insightface-compatible API ---------------------------------------------
+    def prepare(self, ctx_id: int = 0, **kwargs) -> None:
+        """Accept InsightFace's preparation hook for the already-resident GPU session.
+
+        Only ``ctx_id=0`` is supported. CPU fallback and changing devices after
+        construction are unsupported. Extra keywords are ignored as in ArcFaceONNX.
+        """
+        self._ensure_usable()
+        with self._lock:
+            self._ensure_usable()
+            ctx_id = operator.index(ctx_id)
+            if ctx_id != 0:
+                raise ValueError("ArcFaceLoom supports ctx_id=0 only; CPU fallback and device switching are unsupported")
+
     def get_feat(self, imgs) -> np.ndarray:
         """Aligned ``(112, 112, 3)`` uint8 BGR crops -- one, a list, or a stacked
         ``(B, 112, 112, 3)`` array -- to ``(B, 512)`` f32 embeddings, ``max_batch``

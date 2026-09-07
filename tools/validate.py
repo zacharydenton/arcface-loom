@@ -33,7 +33,7 @@ def run_loom(crops: np.ndarray, extra_args: list[str] = ()) -> np.ndarray:
     crops = np.ascontiguousarray(crops, dtype=np.uint8)
     if crops.ndim == 3:
         crops = crops[None]
-    env = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
+    env = os.environ.copy()
     with tempfile.TemporaryDirectory() as tmp:
         src, dst = Path(tmp) / "crops.bin", Path(tmp) / "embeddings.bin"
         crops.tofile(src)

@@ -43,6 +43,9 @@ int arcface_create(const char *weights_dir, const char *kernels_dir, int max_bat
 // downstream); `embeddings_elements` must be exactly batch * 512.
 //
 // Calls on one session are serialized internally. Destruction must not race a run.
+// On a GPU error, queued work is drained before returning. If the drain fails,
+// subsequent runs are rejected; destroy the session and create a new one after
+// resolving the GPU error. Output is written only after a successful run.
 int arcface_run(arcface_session *session, const uint8_t *input, size_t input_bytes, int batch,
                 float *embeddings, size_t embeddings_elements, char *error, size_t error_capacity);
 

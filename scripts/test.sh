@@ -37,10 +37,11 @@ step "launch table matches the graph" bash -c '
   python3 tools/gen_launch_table.py >/dev/null &&
   cmp -s host/graph_table.inc "$tmpdir/table.inc" && cmp -s scripts/kernels.generated "$tmpdir/kernels.generated"'
 step "safety checks survive python -O" python3 -O tools/test_invariants.py
-step "export folds are exact (float64)" env -u LD_LIBRARY_PATH python3 tools/test_export_fold.py
+step "export folds are exact (float64)" python3 tools/test_export_fold.py
 step "export weights" python3 tools/export_weights.py
 step "build kernels" ./scripts/build_kernels.sh
 step "build host programs" ./scripts/build_host.sh
+step "native errors drain uploads and invalidate failed sessions" python3 tools/test_native_errors.py
 
 step "uint8 bgr -> nhwc f16"     python3 tools/test_convert.py
 step "im2col"                    python3 tools/test_im2col.py
@@ -69,12 +70,10 @@ step "session rejects a lying manifest" bash -c '
   [ "$rc" != 0 ] && grep -q "the kernel expects" <<<"$out"'
 
 if [ "$quick" = 0 ]; then
-  # onnxruntime's MIGraphX build loads its own ROCm; keep the Loom runtime path
-  # off these steps as the siblings do.
-  step "alignment vs insightface"                      env -u LD_LIBRARY_PATH python3 tools/test_align.py
-  step "reference vs onnxruntime"                      env -u LD_LIBRARY_PATH python3 tools/test_reference.py
-  step "end to end vs onnxruntime and insightface"     env -u LD_LIBRARY_PATH python3 tools/validate.py
-  step "python api: lifecycle, ABI errors, batches"    env -u LD_LIBRARY_PATH python3 tools/test_python_api.py
+  step "alignment vs insightface"                      python3 tools/test_align.py
+  step "reference vs onnxruntime"                      python3 tools/test_reference.py
+  step "end to end vs onnxruntime and insightface"     python3 tools/validate.py
+  step "python api: lifecycle, ABI errors, batches"    python3 tools/test_python_api.py
 fi
 
 printf '\n'
