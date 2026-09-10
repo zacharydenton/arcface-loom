@@ -63,7 +63,7 @@ impl Cnn {
     pub fn run(&mut self, input: &[u8]) -> Result<usize> {
         ensure!(
             input.len().is_multiple_of(SIZE * SIZE * 3),
-            "input must contain complete {SIZE}×{SIZE} BGR images"
+            "input must contain complete {SIZE}×{SIZE} RGB images"
         );
         let batch = input.len() / (SIZE * SIZE * 3);
         ensure!((1..=self.max_batch).contains(&batch), "invalid batch size");

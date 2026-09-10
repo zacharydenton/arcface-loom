@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     };
     ensure!(
         input.len().is_multiple_of(SIZE * SIZE * 3),
-        "input must be packed 112×112 BGR crops"
+        "input must be packed 112×112 RGB crops"
     );
     let mut model = ArcFace::load(
         &model_path,

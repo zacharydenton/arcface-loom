@@ -1,95 +1,64 @@
 # arcface-hrx
 
-InsightFace w600k_r50 inference in Rust, using [hrx-rs](https://github.com/zacharydenton/hrx-rs)
-for GPU execution and Loom compilation. One Cargo package provides the library
-and CLI. Weights, kernels, activation buffers and I/O storage stay resident;
-HRX graphs are recorded once per encountered batch size and replayed.
+ArcFace face embeddings in Rust with [HRX](https://github.com/zacharydenton/hrx-rs)
+and Loom kernels for AMD GPUs. Runs InsightFace's `w600k_r50` model with
+five-point face alignment. Library and CLI in one crate.
 
-Requires Rust 1.91+, Linux x86-64 and a Radeon 8060S (`gfx1151`). HRX 0.4.0
-provisions its verified runtime and compiler bundle; its native Linux bundle
-requires glibc 2.43 or newer. Model weights are fetched through Hugging Face Hub when needed.
-
-```bash
-cargo build --release
-```
-
-## Library
-
-`from_pretrained` loads the original `w600k_r50.onnx` from InsightFace's `buffalo_l` model pack.
-`onnx-protobuf` parses ONNX; the importer validates the supported graph and
-folds BatchNorm, PReLU and residual operations into the production kernels.
-No exported weight blobs or generated launch tables are required.
-
-```rust,no_run
-use arcface_hrx::{ArcFace, Options};
-
-# fn main() -> anyhow::Result<()> {
-let mut model = ArcFace::from_pretrained(Options::default())?;
-let crops = vec![0u8; 112 * 112 * 3];
-let embeddings = model.embeddings(&crops)?; // Vec<[f32; 512]>
-# Ok(())
-# }
-```
-
-`embeddings` accepts packed, aligned 112×112 uint8 BGR crops and returns
-unnormalized embeddings, matching InsightFace. RGB conversion and normalization
-run on the GPU. `embed(image, width, height, landmarks)` accepts a packed BGR
-image and a slice of five-point `[[f32; 2]; 5]` landmarks, then aligns and embeds
-each face. `alignment::crop` exposes the alignment separately; `similarity`
-computes cosine similarity and rejects zero or non-finite embeddings.
-
-`Options` selects a device index and maximum resident batch (default 16, range
-1–64). Larger crop batches are chunked; empty batches return empty results.
-The four activation buffers use 3.8 MB per resident image, plus weights and
-input/output storage.
-
-Combine with [scrfd-hrx](https://github.com/zacharydenton/scrfd-hrx): pass the
-original BGR image and each detection's `landmarks` to `embed`. No conversion
-of landmark types is required.
-
-## Model weights
-
-`from_pretrained` and the CLI without `--model` use
-[`immich-app/buffalo_l`](https://huggingface.co/immich-app/buffalo_l/tree/d09715916a0778919a770c343533641e250b8699),
-file `recognition/model.onnx`, pinned to revision `d09715916a0778919a770c343533641e250b8699`. The `hf-hub` 1.0 client reuses the shared
-Hugging Face cache before downloading.
-`HF_HOME` and `HF_HUB_CACHE` control its location; `HF_TOKEN` or a cached
-Hugging Face login supplies authentication.
-
-Use `ArcFace::load(path, options)` or `--model w600k_r50.onnx` for a local file.
-An explicit local path never falls back to a download. `hub::weights(true)`
-returns only cached weights. The CLI's `--offline` and `HF_HUB_OFFLINE=1`
-also disable model downloads; `HRX_OFFLINE=1` separately disables runtime
-bundle downloads.
-
-The mirror contains the same original ONNX bytes used by the numerical tests.
-InsightFace’s model terms still apply; the weights are not part of this package.
+Requires Rust 1.91+, Linux x86-64, glibc 2.43+ and a Radeon 8060S (`gfx1151`).
+HRX downloads its pinned runtime/compiler bundle; model weights use Hugging Face Hub.
 
 ## CLI
 
 ```bash
-cargo run --release -- --input aligned-crops.bgr --output embeddings.f32
+cargo run --release -- --input aligned-crops.rgb --output embeddings.f32
 ```
 
-Input is packed BGR bytes, with 112×112×3 bytes per crop. Output is little-endian
-float32, 512 values per crop. Add `--benchmark 100` for timings; benchmark input
-must fit one resident batch.
+Input is packed uint8 **RGB**, 112×112×3 bytes per aligned crop. Output is
+little-endian float32, 512 values per crop. Add `--benchmark 100` for warm
+inference timings; benchmark input must fit one resident batch.
 
-## Execution and validation
+## Rust
 
-Inference requires `&mut` access to the model. A model owns its stream; use
-separate models for independent concurrent callers. GPU failures return errors
-and make the session unusable. Drop releases owned resources through HRX.
-The fixed production kernels are validated only for `gfx1151`.
+```rust
+use arcface_hrx::{ArcFace, Options};
 
-Warm calls reuse compiled kernels, allocations and graphs. Inputs and terminal
-outputs use coherent memory shared with the CPU; inference needs no GPU upload
-or readback copies. Host access waits for completion. Graph dependencies track
-buffer hazards, allowing independent branches to overlap while protecting
-reused activations.
-`benchmark` reports alternating graph/direct forward timings, excluding transfers;
-the CLI also reports warm end-to-end timing. Both are synchronized host timings,
-not hardware timestamp measurements. See [current measurements](docs/optimization-2026-09-10.md).
+fn main() -> anyhow::Result<()> {
+    let crops = std::fs::read("aligned-crops.rgb")?;
+    let mut model = ArcFace::from_pretrained(Options::default())?;
+    let embeddings = model.embeddings(&crops)?;
+    println!("{} embeddings", embeddings.len());
+    Ok(())
+}
+```
+
+`embeddings` accepts aligned RGB crops and returns unnormalized `[f32; 512]`
+vectors, matching InsightFace. Use `similarity` for cosine similarity.
+
+For unaligned images, `embed(image, width, height, landmarks)` accepts packed
+RGB and five landmarks per face. Pass the original RGB image and detections
+from [scrfd-hrx](https://github.com/zacharydenton/scrfd-hrx). `alignment::crop`
+exposes alignment separately.
+
+`Options` selects the device and resident batch size (default 16, range 1–64).
+Larger batches are chunked automatically. Activation memory is 3.8 MB per
+resident image, plus weights and I/O.
+
+## Weights
+
+The default is `recognition/model.onnx` from a pinned revision of
+[immich-app/buffalo_l](https://huggingface.co/immich-app/buffalo_l/tree/d09715916a0778919a770c343533641e250b8699),
+reusing the Hugging Face cache. Use `ArcFace::load(path, options)` or
+`--model w600k_r50.onnx` for local weights.
+
+`--offline` or `HF_HUB_OFFLINE=1` requires cached weights. `HF_HOME` and
+`HF_HUB_CACHE` select the cache location. `HRX_OFFLINE=1` separately disables
+runtime downloads.
+
+## Performance and tests
+
+Models retain weights, buffers and compiled kernels, replaying HRX graphs on
+warm calls. See [benchmarks](docs/optimization-2026-09-10.md).
+Timings use synchronized host clocks, not GPU timestamps.
 
 ```bash
 cargo test
@@ -97,18 +66,12 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release -- --include-ignored --test-threads=1
 ```
 
-CPU tests run without a GPU or model files. Ignored tests fetch the pinned
-weights when needed (`ARCFACE_MODEL` overrides the path) and require hardware; they cover numerical agreement, changing inputs, partial batches and
-graph replay. Tests compare the unfused ONNX model through a Rust CPU reference,
-plus the captured InsightFace fixture. Embedding cosine must exceed 0.99995,
-and pairwise similarity error must remain below 0.001.
-
-The lossless fixture preserves the pixels used for the original reference;
-JPEG decoders can produce different pixels. These small fixtures establish
-numerical agreement, not accuracy on other face datasets.
+The full suite checks numerical references, face alignment, RGB conversion and
+graph replay. GPU tests require `gfx1151`; model tests download the pinned
+weights when needed, unless `ARCFACE_MODEL` supplies a local path. Run `cargo doc --open` for
+the API, and see [CHANGELOG.md](CHANGELOG.md) for migrations.
 
 ## License
 
-Project code is Apache-2.0. Model weights have separate terms and are not
-bundled with this crate. Downloads remain subject to those terms. See [third-party notices](THIRD_PARTY_NOTICES.md)
-for model terms and retained source attribution.
+Code: [Apache-2.0](LICENSE). InsightFace weights have separate terms and are
+not bundled. See [third-party notices](THIRD_PARTY_NOTICES.md).

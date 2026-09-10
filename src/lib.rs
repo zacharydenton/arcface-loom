@@ -1,4 +1,4 @@
-//! ArcFace w600k_r50 inference. Aligned inputs are 112×112 uint8 BGR;
+//! ArcFace w600k_r50 inference. Aligned inputs are 112×112 uint8 RGB;
 //! embeddings are 512 unnormalized float32 values, as in InsightFace.
 pub mod alignment;
 mod cnn;
@@ -54,11 +54,11 @@ impl ArcFace {
             )?,
         })
     }
-    /// Encode a contiguous batch of aligned 112×112 BGR crops, chunking as needed.
+    /// Encode a contiguous batch of aligned 112×112 RGB crops, chunking as needed.
     pub fn embeddings(&mut self, crops: &[u8]) -> Result<Vec<[f32; EMBEDDING]>> {
         ensure!(
             crops.len().is_multiple_of(SIZE * SIZE * 3),
-            "expected complete 112×112 BGR crops"
+            "expected complete 112×112 RGB crops"
         );
         let mut out = vec![[0.; EMBEDDING]; crops.len() / (SIZE * SIZE * 3)];
         for (input, out) in crops
@@ -83,7 +83,7 @@ impl ArcFace {
             .engine
             .benchmark(crops.len() / (SIZE * SIZE * 3), samples)
     }
-    /// Align and embed faces from a packed BGR image and five landmarks per face.
+    /// Align and embed faces from a packed RGB image and five landmarks per face.
     pub fn embed(
         &mut self,
         image: &[u8],

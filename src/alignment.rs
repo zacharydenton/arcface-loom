@@ -57,13 +57,13 @@ pub fn transform(points: &[[f32; 2]; 5]) -> Result<[[f64; 3]; 2]> {
     );
     Ok([[a[(0, 0)], a[(0, 1)], t[0]], [a[(1, 0)], a[(1, 1)], t[1]]])
 }
-/// Warp a packed BGR image into a 112×112 BGR crop.
+/// Warp a packed RGB image into a 112×112 RGB crop.
 pub fn crop(image: &[u8], width: usize, height: usize, points: &[[f32; 2]; 5]) -> Result<Vec<u8>> {
     ensure!(
         width > 0
             && height > 0
             && width.checked_mul(height).and_then(|n| n.checked_mul(3)) == Some(image.len()),
-        "invalid BGR image size"
+        "invalid RGB image size"
     );
     let t = transform(points)?;
     let det = t[0][0] * t[1][1] - t[0][1] * t[1][0];

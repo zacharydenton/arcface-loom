@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Accept packed RGB images and aligned crops in `embed`, `embeddings`, `alignment::crop`, and the CLI. BGR callers must swap red and blue before calling.
+- Normalize and pad each input pixel with one vector store in the GPU preprocessing kernel.
+- Return errors instead of panicking when malformed ONNX models pass non-spatial tensors to Transpose, pooling, or Resize.
+
 - Fetch pinned pretrained weights through the shared Hugging Face cache by default; retain local-file and offline loading.
 - Require Rust 1.91 for the HF Hub 1.0 dependency stack.
 

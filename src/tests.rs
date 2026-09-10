@@ -1,5 +1,55 @@
 use super::*;
 #[test]
+#[ignore = "requires gfx1151"]
+fn rgb_conversion_and_padding() -> Result<()> {
+    use crate::engine::{Engine, Launch};
+    use hrx::loom::Specialization;
+
+    let mut engine = Engine::new(0)?;
+    let input = engine.allocate_io(32 * 3)?;
+    let output = engine.allocate_io(32 * 8 * 2)?;
+    let mut spec = Specialization::new("arcface_hwc_u8_to_nhwc_f16");
+    spec.config
+        .insert("arcface.hwc_u8_to_nhwc_f16.size".into(), "16".into());
+    engine.compile(&[(include_str!("../kernels/hwc_u8_to_nhwc_f16.loom"), spec)])?;
+    engine.record(
+        1,
+        &[Launch {
+            kernel: 0,
+            scalar: 2,
+            grid: [2, 1, 1],
+            bindings: vec![input, output],
+            output: output.buffer,
+        }],
+    )?;
+    // Unequal channels catch accidental RGB/BGR reversal. Replay with changed
+    // colors also checks that every channel, including padding, is overwritten.
+    for seed in [0, 73] {
+        let rgb: Vec<u8> = (0..32 * 3).map(|i| ((i * 37 + seed) % 256) as u8).collect();
+        engine.upload(input, &rgb)?;
+        engine.upload(output, &vec![0xff; output.bytes])?;
+        engine.replay(1)?;
+        let mut bytes = vec![0u8; output.bytes];
+        engine.read_many(&mut [(output, &mut bytes)])?;
+        for (p, pixel) in bytes.chunks_exact(16).enumerate() {
+            for (c, value) in pixel.chunks_exact(2).enumerate() {
+                let expected = if c < 3 {
+                    (rgb[p * 3 + c] as f32 - 127.5) / 127.5
+                } else {
+                    0.
+                };
+                assert_eq!(
+                    half::f16::from_le_bytes([value[0], value[1]]),
+                    half::f16::from_f32(expected),
+                    "pixel {p}, channel {c}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn input_and_alignment_validation() {
     assert!(alignment::transform(&[[0.; 2]; 5]).is_err());
     assert!(alignment::transform(&[[f32::NAN; 2]; 5]).is_err());
@@ -45,7 +95,7 @@ fn native_reference_and_replay() -> Result<()> {
     let batch = model.embeddings(&crops)?;
     for (i, crop) in crops.chunks(112 * 112 * 3).enumerate() {
         let blob = tract_ndarray::Array4::from_shape_fn((1, 3, 112, 112), |(_, c, y, x)| {
-            (crop[(y * 112 + x) * 3 + 2 - c] as f32 - 127.5) / 127.5
+            (crop[(y * 112 + x) * 3 + c] as f32 - 127.5) / 127.5
         });
         let expected = reference.run(tvec![blob.into_tensor().into()])?;
         let data = expected[0].to_array_view::<f32>()?;
@@ -99,6 +149,94 @@ fn malformed_onnx_returns_errors() {
     assert!(onnx::Network::from_bytes(&model.write_to_bytes().unwrap(), 112).is_err());
 }
 #[test]
+fn spatial_operators_reject_flattened_input() -> Result<()> {
+    use onnx_protobuf::{
+        AttributeProto, GraphProto, Message, ModelProto, NodeProto, ValueInfoProto,
+        attribute_proto::AttributeType,
+    };
+    let ints = |name: &str, values: &[i64]| AttributeProto {
+        name: name.into(),
+        type_: AttributeType::INTS.into(),
+        ints: values.to_vec(),
+        ..Default::default()
+    };
+    let text = |name: &str, value: &str| AttributeProto {
+        name: name.into(),
+        type_: AttributeType::STRING.into(),
+        s: value.as_bytes().to_vec(),
+        ..Default::default()
+    };
+    let dir = tempfile::tempdir()?;
+    for (op, attribute) in [
+        ("Transpose", vec![ints("perm", &[2, 3, 0, 1])]),
+        (
+            "MaxPool",
+            vec![ints("kernel_shape", &[2, 2]), ints("strides", &[2, 2])],
+        ),
+        (
+            "AveragePool",
+            vec![ints("kernel_shape", &[2, 2]), ints("strides", &[2, 2])],
+        ),
+        (
+            "Resize",
+            vec![
+                text("mode", "nearest"),
+                text("coordinate_transformation_mode", "asymmetric"),
+                text("nearest_mode", "floor"),
+            ],
+        ),
+    ] {
+        let value = |name: &str| ValueInfoProto {
+            name: name.into(),
+            ..Default::default()
+        };
+        let graph = GraphProto {
+            input: vec![value("x")],
+            output: vec![value("y")],
+            node: vec![
+                NodeProto {
+                    op_type: "Flatten".into(),
+                    input: vec!["x".into()],
+                    output: vec!["flat".into()],
+                    ..Default::default()
+                },
+                NodeProto {
+                    op_type: "Shape".into(),
+                    input: vec!["x".into()],
+                    output: vec!["sizes".into()],
+                    ..Default::default()
+                },
+                NodeProto {
+                    op_type: op.into(),
+                    input: if op == "Resize" {
+                        vec!["flat".into(), "".into(), "".into(), "sizes".into()]
+                    } else {
+                        vec!["flat".into()]
+                    },
+                    output: vec!["y".into()],
+                    attribute,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let model = ModelProto {
+            graph: Some(graph).into(),
+            ..Default::default()
+        };
+        let path = dir.path().join(format!("{op}.onnx"));
+        std::fs::write(&path, model.write_to_bytes()?)?;
+        let error = ArcFace::load(&path, Options::default())
+            .err()
+            .expect("invalid rank must fail");
+        assert_eq!(
+            error.to_string(),
+            format!("{op}: expected rank-4 input, got rank 2")
+        );
+    }
+    Ok(())
+}
+#[test]
 fn landmark_fixture() -> Result<()> {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../tests/fixtures/t1_arcface.json"))?;
@@ -119,10 +257,7 @@ fn insightface_fixture() -> Result<()> {
         serde_json::from_str(include_str!("../tests/fixtures/t1_arcface.json"))?;
     let image = image::load_from_memory(include_bytes!("../tests/fixtures/t1.png"))?.to_rgb8();
     let (w, h) = image.dimensions();
-    let mut bgr = image.into_raw();
-    for p in bgr.chunks_exact_mut(3) {
-        p.swap(0, 2);
-    }
+    let rgb = image.into_raw();
     let mut model = ArcFace::load(model_path()?, Options::default())?;
     let mut expected = vec![];
     let mut landmarks = vec![];
@@ -134,7 +269,7 @@ fn insightface_fixture() -> Result<()> {
             face["embedding"].clone(),
         )?);
     }
-    let got = model.embed(&bgr, w as usize, h as usize, &landmarks)?;
+    let got = model.embed(&rgb, w as usize, h as usize, &landmarks)?;
     for (a, b) in got.iter().zip(&expected) {
         assert!(cosine(a, b) > 0.99995, "cosine {}", cosine(a, b));
     }

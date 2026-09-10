@@ -229,6 +229,12 @@ impl Network {
                 n.op_type
             );
             let input = || net.shape(&n.input[0]);
+            let spatial_input = || -> Result<&[usize; 4]> {
+                let s = input()?;
+                s.try_into().with_context(|| {
+                    format!("{}: expected rank-4 input, got rank {}", n.op_type, s.len())
+                })
+            };
             let shape = match n.op_type.as_str() {
                 "Conv" => {
                     ensure!(n.input.len() == 3, "convolution must include bias");
@@ -321,7 +327,7 @@ impl Network {
                             && n.i("ceil_mode", 0) == 0,
                         "unsupported pool"
                     );
-                    let s = input()?;
+                    let s = spatial_input()?;
                     vec![1, s[1], s[2] / 2, s[3] / 2]
                 }
                 "Flatten" => {
@@ -415,7 +421,7 @@ impl Network {
                             && n.input.len() == 4,
                         "unsupported Resize"
                     );
-                    let s = input()?;
+                    let s = spatial_input()?;
                     let out = vec![1, s[1], s[2] * 2, s[3] * 2];
                     ensure!(
                         folded.get(&n.input[3]) == Some(&out.iter().map(|x| *x as i64).collect()),
@@ -425,7 +431,7 @@ impl Network {
                 }
                 "Transpose" => {
                     ensure!(n.ints("perm", &[]) == [2, 3, 0, 1], "unsupported transpose");
-                    let s = input()?;
+                    let s = spatial_input()?;
                     vec![s[2], s[3], s[0], s[1]]
                 }
                 "Reshape" => {
