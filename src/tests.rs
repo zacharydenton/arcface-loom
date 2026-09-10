@@ -23,10 +23,10 @@ fn cosine(a: &[f32], b: &[f32]) -> f64 {
     dot / (norm(a) * norm(b)).sqrt()
 }
 #[test]
-#[ignore = "requires ARCFACE_MODEL and gfx1151"]
+#[ignore = "requires pretrained weights and gfx1151"]
 fn native_reference_and_replay() -> Result<()> {
     use tract_onnx::prelude::*;
-    let path = std::env::var("ARCFACE_MODEL")?;
+    let path = model_path()?;
     let mut model = ArcFace::load(
         &path,
         Options {
@@ -62,9 +62,9 @@ fn native_reference_and_replay() -> Result<()> {
     Ok(())
 }
 #[test]
-#[ignore = "requires ARCFACE_MODEL; CPU model import"]
+#[ignore = "requires pretrained weights; CPU model import"]
 fn importer_liveness() -> Result<()> {
-    let p = model::load(std::path::Path::new(&std::env::var("ARCFACE_MODEL")?))?;
+    let p = model::load(std::path::Path::new(&model_path()?))?;
     assert_eq!(p.ops.len(), 56);
     assert_eq!(p.buffers, [200704, 1605632, 1605632, 401408]);
     for l in p.ops {
@@ -113,7 +113,7 @@ fn landmark_fixture() -> Result<()> {
     Ok(())
 }
 #[test]
-#[ignore = "requires ARCFACE_MODEL, bundled InsightFace fixture and gfx1151"]
+#[ignore = "requires pretrained weights and gfx1151"]
 fn insightface_fixture() -> Result<()> {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../tests/fixtures/t1_arcface.json"))?;
@@ -123,7 +123,7 @@ fn insightface_fixture() -> Result<()> {
     for p in bgr.chunks_exact_mut(3) {
         p.swap(0, 2);
     }
-    let mut model = ArcFace::load(std::env::var("ARCFACE_MODEL")?, Options::default())?;
+    let mut model = ArcFace::load(model_path()?, Options::default())?;
     let mut expected = vec![];
     let mut landmarks = vec![];
     for face in fixture["faces"].as_array().unwrap() {
@@ -144,4 +144,11 @@ fn insightface_fixture() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn model_path() -> Result<std::path::PathBuf> {
+    match std::env::var_os("ARCFACE_MODEL") {
+        Some(path) => Ok(path.into()),
+        None => hub::weights(false),
+    }
 }

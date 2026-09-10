@@ -3,6 +3,7 @@
 pub mod alignment;
 mod cnn;
 mod engine;
+pub mod hub;
 mod model;
 mod onnx;
 mod plan;
@@ -28,6 +29,17 @@ pub struct ArcFace {
     cnn: cnn::Cnn,
 }
 impl ArcFace {
+    /// Load the pinned pretrained model from the Hugging Face cache, fetching it
+    /// if needed. Set `HF_HUB_OFFLINE=1` for cached weights only.
+    /// Use [`Self::load`] to supply a local file instead.
+    pub fn from_pretrained(options: Options) -> Result<Self> {
+        ensure!(
+            (1..=64).contains(&options.max_batch),
+            "max_batch must be 1..=64"
+        );
+        Self::load(hub::weights(false)?, options)
+    }
+
     /// Validate and pack the model, compile kernels, and allocate resident storage.
     pub fn load(path: impl AsRef<Path>, options: Options) -> Result<Self> {
         ensure!(

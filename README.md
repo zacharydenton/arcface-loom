@@ -2,12 +2,12 @@
 
 InsightFace w600k_r50 inference in Rust, using [hrx-rs](https://github.com/zacharydenton/hrx-rs)
 for GPU execution and Loom compilation. One Cargo package provides the library
-and CLI. Weights, kernels, activation buffers and readback storage stay resident;
+and CLI. Weights, kernels, activation buffers and I/O storage stay resident;
 HRX graphs are recorded once per encountered batch size and replayed.
 
-Requires Rust 1.88+, Linux x86-64 and a Radeon 8060S (`gfx1151`). HRX 0.4.0
+Requires Rust 1.91+, Linux x86-64 and a Radeon 8060S (`gfx1151`). HRX 0.4.0
 provisions its verified runtime and compiler bundle; its native Linux bundle
-requires glibc 2.43 or newer. Model files are supplied separately.
+requires glibc 2.43 or newer. Model weights are fetched through Hugging Face Hub when needed.
 
 ```bash
 cargo build --release
@@ -15,7 +15,7 @@ cargo build --release
 
 ## Library
 
-Load the original `w600k_r50.onnx` from InsightFace's `buffalo_l` model pack.
+`from_pretrained` loads the original `w600k_r50.onnx` from InsightFace's `buffalo_l` model pack.
 `onnx-protobuf` parses ONNX; the importer validates the supported graph and
 folds BatchNorm, PReLU and residual operations into the production kernels.
 No exported weight blobs or generated launch tables are required.
@@ -24,7 +24,7 @@ No exported weight blobs or generated launch tables are required.
 use arcface_hrx::{ArcFace, Options};
 
 # fn main() -> anyhow::Result<()> {
-let mut model = ArcFace::load("w600k_r50.onnx", Options::default())?;
+let mut model = ArcFace::from_pretrained(Options::default())?;
 let crops = vec![0u8; 112 * 112 * 3];
 let embeddings = model.embeddings(&crops)?; // Vec<[f32; 512]>
 # Ok(())
@@ -41,17 +41,34 @@ computes cosine similarity and rejects zero or non-finite embeddings.
 `Options` selects a device index and maximum resident batch (default 16, range
 1–64). Larger crop batches are chunked; empty batches return empty results.
 The four activation buffers use 3.8 MB per resident image, plus weights and
-input/readback storage.
+input/output storage.
 
 Combine with [scrfd-hrx](https://github.com/zacharydenton/scrfd-hrx): pass the
 original BGR image and each detection's `landmarks` to `embed`. No conversion
 of landmark types is required.
 
+## Model weights
+
+`from_pretrained` and the CLI without `--model` use
+[`immich-app/buffalo_l`](https://huggingface.co/immich-app/buffalo_l/tree/d09715916a0778919a770c343533641e250b8699),
+file `recognition/model.onnx`, pinned to revision `d09715916a0778919a770c343533641e250b8699`. The `hf-hub` 1.0 client reuses the shared
+Hugging Face cache before downloading.
+`HF_HOME` and `HF_HUB_CACHE` control its location; `HF_TOKEN` or a cached
+Hugging Face login supplies authentication.
+
+Use `ArcFace::load(path, options)` or `--model w600k_r50.onnx` for a local file.
+An explicit local path never falls back to a download. `hub::weights(true)`
+returns only cached weights. The CLI's `--offline` and `HF_HUB_OFFLINE=1`
+also disable model downloads; `HRX_OFFLINE=1` separately disables runtime
+bundle downloads.
+
+The mirror contains the same original ONNX bytes used by the numerical tests.
+InsightFace’s model terms still apply; the weights are not part of this package.
+
 ## CLI
 
 ```bash
-cargo run --release -- --model w600k_r50.onnx \
-  --input aligned-crops.bgr --output embeddings.f32
+cargo run --release -- --input aligned-crops.bgr --output embeddings.f32
 ```
 
 Input is packed BGR bytes, with 112×112×3 bytes per crop. Output is little-endian
@@ -65,22 +82,23 @@ separate models for independent concurrent callers. GPU failures return errors
 and make the session unusable. Drop releases owned resources through HRX.
 The fixed production kernels are validated only for `gfx1151`.
 
-Warm calls reuse compiled kernels, device allocations and graphs. Uploads are
-queued; readback copies share the inference stream and complete before host
-access. Graph dependencies preserve launch order and activation-buffer reuse.
+Warm calls reuse compiled kernels, allocations and graphs. Inputs and terminal
+outputs use coherent memory shared with the CPU; inference needs no GPU upload
+or readback copies. Host access waits for completion. Graph dependencies track
+buffer hazards, allowing independent branches to overlap while protecting
+reused activations.
 `benchmark` reports alternating graph/direct forward timings, excluding transfers;
 the CLI also reports warm end-to-end timing. Both are synchronized host timings,
-not hardware timestamp measurements. See [current measurements](docs/benchmark-2026-09-10.md).
+not hardware timestamp measurements. See [current measurements](docs/optimization-2026-09-10.md).
 
 ```bash
 cargo test
 cargo clippy --all-targets -- -D warnings
-ARCFACE_MODEL=/path/to/w600k_r50.onnx \
-  cargo test --release -- --include-ignored --test-threads=1
+cargo test --release -- --include-ignored --test-threads=1
 ```
 
-CPU tests run without a GPU or model files. Ignored tests require the model and
-hardware; they cover numerical agreement, changing inputs, partial batches and
+CPU tests run without a GPU or model files. Ignored tests fetch the pinned
+weights when needed (`ARCFACE_MODEL` overrides the path) and require hardware; they cover numerical agreement, changing inputs, partial batches and
 graph replay. Tests compare the unfused ONNX model through a Rust CPU reference,
 plus the captured InsightFace fixture. Embedding cosine must exceed 0.99995,
 and pairwise similarity error must remain below 0.001.
@@ -92,5 +110,5 @@ numerical agreement, not accuracy on other face datasets.
 ## License
 
 Project code is Apache-2.0. Model weights have separate terms and are not
-included or downloaded by this crate. See [third-party notices](THIRD_PARTY_NOTICES.md)
+bundled with this crate. Downloads remain subject to those terms. See [third-party notices](THIRD_PARTY_NOTICES.md)
 for model terms and retained source attribution.

@@ -1,0 +1,593 @@
+{
+  "date": "2026-09-10",
+  "gpu": "Radeon 8060S gfx1151",
+  "hrx": "0.4.0",
+  "hrx_system_inspected_revision": "ecaaf7376f7dcaa599f6258b0d1c38ff7fbd0e3d",
+  "baseline_commit": "f5d8cdd",
+  "method": "Three paired rounds, reversing order each round; 10 warmups and 300 samples per executable. Timings are synchronized host wall-clock, not GPU timestamps. max_batch=16.",
+  "variants": {
+    "baseline": "shipped implementation",
+    "shared": "coherent input and separate terminal outputs; sequential graph",
+    "dependencies": "coherent I/O plus buffer hazard dependencies"
+  },
+  "final_trials": [
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 0,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.4728440000000003,
+          "p95_ms": 2.4958340000000003
+        },
+        "direct": {
+          "median_ms": 2.494343,
+          "p95_ms": 2.519603
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.491003,
+        "p95_ms": 2.511563,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 476.39984899999996
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 0,
+      "variant": "dependencies",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.383706,
+          "p95_ms": 2.4056059999999997
+        },
+        "direct": {
+          "median_ms": 2.4948729999999997,
+          "p95_ms": 2.519683
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.385466,
+        "p95_ms": 2.405825,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 350.587374
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 1,
+      "variant": "dependencies",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.386446,
+          "p95_ms": 2.408956
+        },
+        "direct": {
+          "median_ms": 2.4870140000000003,
+          "p95_ms": 2.5084429999999998
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.382336,
+        "p95_ms": 2.406586,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 348.735283
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 1,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.477044,
+          "p95_ms": 2.499493
+        },
+        "direct": {
+          "median_ms": 2.499133,
+          "p95_ms": 2.5212630000000003
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.4908040000000002,
+        "p95_ms": 2.674779,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 358.240298
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 2,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.439695,
+          "p95_ms": 2.523782
+        },
+        "direct": {
+          "median_ms": 2.464144,
+          "p95_ms": 2.569011
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.463024,
+        "p95_ms": 2.4806939999999997,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 369.911155
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 2,
+      "variant": "dependencies",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.4022650000000003,
+          "p95_ms": 2.693718
+        },
+        "direct": {
+          "median_ms": 2.5168730000000004,
+          "p95_ms": 2.817505
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.419035,
+        "p95_ms": 2.532993,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 357.00421
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 0,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.669166,
+          "p95_ms": 4.860689
+        },
+        "direct": {
+          "median_ms": 4.715784,
+          "p95_ms": 4.894099
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.4608110000000005,
+        "p95_ms": 4.726693,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 369.234244
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 0,
+      "variant": "dependencies",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.372473,
+          "p95_ms": 4.701434
+        },
+        "direct": {
+          "median_ms": 4.523849,
+          "p95_ms": 4.802912
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.382183,
+        "p95_ms": 4.415242,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 363.00331
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 1,
+      "variant": "dependencies",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.298085,
+          "p95_ms": 4.334384
+        },
+        "direct": {
+          "median_ms": 4.404603,
+          "p95_ms": 4.436082
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.3077250000000005,
+        "p95_ms": 4.330334,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 354.813398
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 1,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.442971,
+          "p95_ms": 4.469081
+        },
+        "direct": {
+          "median_ms": 4.465241,
+          "p95_ms": 4.5038789999999995
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.4737800000000005,
+        "p95_ms": 4.497369,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 366.066007
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 2,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.405793,
+          "p95_ms": 4.506329
+        },
+        "direct": {
+          "median_ms": 4.460901,
+          "p95_ms": 4.570708
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.49261,
+        "p95_ms": 4.763342000000001,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 356.331336
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 2,
+      "variant": "dependencies",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.2930850000000005,
+          "p95_ms": 4.813671
+        },
+        "direct": {
+          "median_ms": 4.49541,
+          "p95_ms": 4.8789690000000006
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.342713,
+        "p95_ms": 4.394733,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 367.417829
+      }
+    }
+  ],
+  "shared_only_trials": [
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 0,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.472494,
+          "p95_ms": 2.495254
+        },
+        "direct": {
+          "median_ms": 2.496543,
+          "p95_ms": 2.5194330000000003
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.490634,
+        "p95_ms": 2.515353,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 461.55212
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 0,
+      "variant": "shared",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.448805,
+          "p95_ms": 2.4750639999999997
+        },
+        "direct": {
+          "median_ms": 2.472474,
+          "p95_ms": 2.5090730000000003
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.469204,
+        "p95_ms": 2.560082,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 340.817863
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 1,
+      "variant": "shared",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.449615,
+          "p95_ms": 2.480104
+        },
+        "direct": {
+          "median_ms": 2.476504,
+          "p95_ms": 2.5137929999999997
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.449754,
+        "p95_ms": 2.473784,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 360.571495
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 1,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.454964,
+          "p95_ms": 2.6228599999999997
+        },
+        "direct": {
+          "median_ms": 2.482434,
+          "p95_ms": 2.646099
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.509103,
+        "p95_ms": 2.756526,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 352.683625
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 2,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.4473149999999997,
+          "p95_ms": 2.473594
+        },
+        "direct": {
+          "median_ms": 2.470964,
+          "p95_ms": 2.497264
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.464664,
+        "p95_ms": 2.4949030000000003,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 369.617842
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 1,
+      "round": 2,
+      "variant": "shared",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 2.6278400000000004,
+          "p95_ms": 2.8035349999999997
+        },
+        "direct": {
+          "median_ms": 2.659159,
+          "p95_ms": 2.8769329999999997
+        }
+      },
+      "end_to_end": {
+        "median_ms": 2.4390940000000003,
+        "p95_ms": 2.467975,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 353.307068
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 0,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.459551,
+          "p95_ms": 4.662516
+        },
+        "direct": {
+          "median_ms": 4.48618,
+          "p95_ms": 4.703114
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.47425,
+        "p95_ms": 4.729094,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 358.648625
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 0,
+      "variant": "shared",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.395243,
+          "p95_ms": 5.403696
+        },
+        "direct": {
+          "median_ms": 4.457801,
+          "p95_ms": 5.409236000000001
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.404853,
+        "p95_ms": 4.442471,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 353.9121
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 1,
+      "variant": "shared",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.453931000000001,
+          "p95_ms": 4.989706
+        },
+        "direct": {
+          "median_ms": 4.48356,
+          "p95_ms": 4.971397
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.440651,
+        "p95_ms": 4.48224,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 367.079678
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 1,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.423102,
+          "p95_ms": 4.466431
+        },
+        "direct": {
+          "median_ms": 4.4501610000000005,
+          "p95_ms": 4.48909
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.4456310000000006,
+        "p95_ms": 4.468801,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 343.63955400000003
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 2,
+      "variant": "baseline",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.407532,
+          "p95_ms": 4.441962
+        },
+        "direct": {
+          "median_ms": 4.436901,
+          "p95_ms": 4.49486
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.4432409999999996,
+        "p95_ms": 4.478689999999999,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 344.911449
+      }
+    },
+    {
+      "model": "arcface",
+      "batch": 6,
+      "round": 2,
+      "variant": "shared",
+      "forward": {
+        "samples": 300,
+        "graph": {
+          "median_ms": 4.387443,
+          "p95_ms": 4.431252
+        },
+        "direct": {
+          "median_ms": 4.408893,
+          "p95_ms": 4.463791
+        }
+      },
+      "end_to_end": {
+        "median_ms": 4.393603000000001,
+        "p95_ms": 4.429392,
+        "samples": 300,
+        "scope": "warm end-to-end, including transfers",
+        "setup_ms": 341.237497
+      }
+    }
+  ]
+}
