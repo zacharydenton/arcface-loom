@@ -1,5 +1,5 @@
 // Sums the split-K partial slabs of the embedding head and adds the bias.
-// dinov3-loom's splitk_reduce_f16 without its LayerScale and residual: the
+// dinov3-hrx's splitk_reduce_f16 without its LayerScale and residual: the
 // embedding is the model's output and stays f32.
 //
 // The partials are [splits][token_count][n_size] f32; the output is

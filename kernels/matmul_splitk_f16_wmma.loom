@@ -1,7 +1,7 @@
 // Split-K matmul for the embedding head: M = batch, K = 25088, N = 512. The k
 // range is cut into `splits` chunks on a third grid axis, each workgroup
 // accumulating one chunk into its own slab of an f32 partials buffer;
-// splitk_reduce_f32 sums the slabs and adds the bias. dinov3-loom's kernel (its
+// splitk_reduce_f32 sums the slabs and adds the bias. dinov3-hrx's kernel (its
 // batch-1 down projection had the same problem: a handful of 64x64 tiles against
 // 40 CUs), with K widened to 32768 and the split count a config.
 //
@@ -18,8 +18,8 @@
 amdgpu.target<gfx11-generic> @arcface_matmul_splitk_gfx11 {subgroup_size = 32}
 
 // Each split walks k_size/splits in steps of 32, so k_size must be divisible by
-// 32*splits. `where` cannot relate two configs, so tools/gen_launch_table.py asserts
-// it when it picks the split count (tools/export_weights.py: head_splits). K reaches
+// 32*splits. `where` cannot relate two configs, so the model schedule asserts
+// it when it picks the split count (the model importer: head_splits). K reaches
 // 25088 here, past the siblings' 8192.
 config.decl @arcface.matmul_splitk_f16_wmma.k_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
 

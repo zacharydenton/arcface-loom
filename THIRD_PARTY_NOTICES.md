@@ -1,6 +1,6 @@
 # Third-party notices
 
-`arcface_loom_align.py` reproduces two pieces of other people's code so the installed
+`src/alignment.rs` reproduces two pieces of other people's code so the installed
 package can align faces without depending on them:
 
 - `ARCFACE_DST`, `estimate_norm` and `norm_crop` follow
@@ -17,8 +17,6 @@ policy is in its [README](https://github.com/deepinsight/insightface#license);
 scikit-image's notices are in its
 [LICENSE.txt](https://github.com/scikit-image/scikit-image/blob/v0.26.0/LICENSE.txt).
 
-`tools/capture_fixture.py` imports insightface's `face_align.py` from a source checkout
-at capture time only; nothing from it ships.
 
 The model this repo runs, `w600k_r50.onnx` from insightface's `buffalo_l` pack, is
 distributed by insightface for non-commercial research purposes and is not part of
@@ -74,3 +72,10 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Validation fixture
+
+`tests/fixtures/t1.png` preserves the decoded pixels of InsightFace's
+[`t1.jpg`](https://github.com/deepinsight/insightface/blob/7fadd420c2351d0ffa8cac403421c1a3ed733365/python-package/insightface/data/images/t1.jpg).
+The accompanying JSON records the existing InsightFace reference results.
+These retain the InsightFace MIT attribution above. No model weights are included.
